@@ -15,8 +15,8 @@ marketplaceRouter.get('/marketplace/prices', (_req: Request, res: Response) => {
 });
 
 marketplaceRouter.post('/marketplace/listings', async (req: Request, res: Response) => {
-  const { seller_phone, seller_email, crop, quantity_kg, price_per_kg_zmw,
-          village, province, description } = req.body;
+  const { seller_name, seller_phone, seller_email, crop, quantity_kg, price_per_kg_zmw,
+          district, village, province, description } = req.body;
   if (!seller_phone || !crop || !quantity_kg || !price_per_kg_zmw) {
     return res.status(400).json({ error: 'seller_phone, crop, quantity_kg, price_per_kg_zmw required' });
   }
@@ -26,10 +26,10 @@ marketplaceRouter.post('/marketplace/listings', async (req: Request, res: Respon
     email = u?.email || null;
   }
   const listing = createListing({
-    seller_phone, seller_email: email, crop,
+    seller_name, seller_phone, seller_email: email, crop,
     quantity_kg: Number(quantity_kg),
     price_per_kg_zmw: Number(price_per_kg_zmw),
-    village, province, description,
+    district, village, province, description,
   });
   try {
     await sendSms(seller_phone,

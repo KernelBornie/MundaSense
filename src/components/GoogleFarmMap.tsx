@@ -71,7 +71,7 @@ export function GoogleFarmMap({
     window.__msInitGoogleMap = () => initMap();
     if (!document.querySelector('script[data-ms-maps]')) {
       const s = document.createElement('script');
-      s.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_KEY}&libraries=geometry&callback=__msInitGoogleMap`;
+      s.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_KEY}&libraries=geometry&loading=async&callback=__msInitGoogleMap`;
       s.async = true;
       s.defer = true;
       s.dataset.msMaps = '1';
@@ -283,6 +283,44 @@ export function GoogleFarmMap({
       marker.addListener('click', () => info.open(map, marker));
       markersRef.current.push(marker);
     });
+
+    // 2b. Lukulu District Landmark Pin
+    const lukuluMarker = new g.Marker({
+      map,
+      position: { lat: -14.3707, lng: 23.2425 },
+      title: '📍 Lukulu District, Western Province (4 Strategic Depots)',
+      label: {
+        text: '📍 Lukulu',
+        color: '#ffffff',
+        fontSize: '11px',
+        fontWeight: 'bold',
+      },
+      icon: {
+        path: g.SymbolPath.CIRCLE,
+        scale: 7,
+        fillColor: '#059669',
+        fillOpacity: 0.95,
+        strokeColor: '#ffffff',
+        strokeWeight: 2,
+      },
+      zIndex: 9999,
+    });
+    const lukuluInfo = new g.InfoWindow({
+      content: `
+        <div style="font-family:system-ui;min-width:240px;color:#111;">
+          <div style="font-weight:800;color:#059669;font-size:14px;margin-bottom:4px;">
+            📍 Lukulu District Landmark
+          </div>
+          <div style="font-size:12px;line-height:1.6;color:#374151;">
+            <div><b>Province:</b> Western Province</div>
+            <div><b>Coordinates:</b> -14.3707°S, 23.2425°E</div>
+            <div><b>Local Depots:</b> 4 Strategic Depots (Coop Union, FRA Depot, Rice Millers, Fisheries)</div>
+          </div>
+        </div>
+      `,
+    });
+    lukuluMarker.addListener('click', () => lukuluInfo.open(map, lukuluMarker));
+    markersRef.current.push(lukuluMarker);
 
     // 3. Farm markers (zIndex 500)
     safeFarms.forEach((f) => {

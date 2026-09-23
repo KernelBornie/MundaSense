@@ -1,9 +1,9 @@
 /**
  * MundaSense — Persistent Database Layer
- * Built with native Node.js SQLite (node:sqlite).
+ * Built with SQLite (better-sqlite3).
  * SQLite file stored at data/mundasense.db.
  */
-import { DatabaseSync } from 'node:sqlite';
+import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
@@ -12,9 +12,9 @@ const DATA_DIR = path.resolve('data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
 const DB_PATH = path.join(DATA_DIR, 'mundasense.db');
-export const db = new DatabaseSync(DB_PATH);
-db.exec('PRAGMA journal_mode = WAL;');
-db.exec('PRAGMA foreign_keys = ON;');
+export const db = new Database(DB_PATH);
+db.pragma('journal_mode = WAL');
+db.pragma('foreign_keys = ON');
 
 /* ============================================================
    SCHEMA
@@ -258,16 +258,32 @@ try {
 }
 
 try {
-  const cols = (db.prepare('PRAGMA table_info(listings)').all() as any[]).map((c: any) => c.name);
-  if (!cols.includes('seller_phone'))
+  const listingCols = (db.prepare('PRAGMA table_info(listings)').all() as any[]).map((c: any) => c.name);
+  if (!listingCols.includes('seller_phone'))
     db.exec("ALTER TABLE listings ADD COLUMN seller_phone TEXT");
-  if (!cols.includes('seller_email'))
+  if (!listingCols.includes('seller_email'))
     db.exec("ALTER TABLE listings ADD COLUMN seller_email TEXT");
+  if (!listingCols.includes('seller_name'))
+    db.exec("ALTER TABLE listings ADD COLUMN seller_name TEXT");
+  if (!listingCols.includes('district'))
+    db.exec("ALTER TABLE listings ADD COLUMN district TEXT");
 
   db.exec(`
     UPDATE listings SET seller_email = 'seller@mundasense.zm' WHERE (seller_email IS NULL OR seller_email = '') AND seller_phone = '+260970000004';
     UPDATE listings SET seller_email = 'farmer@mundasense.zm' WHERE (seller_email IS NULL OR seller_email = '') AND seller_phone = '+260970000002';
   `);
+
+  const trCols = (db.prepare('PRAGMA table_info(transport_requests)').all() as any[]).map((c: any) => c.name);
+  if (!trCols.includes('pickup_province'))
+    db.exec("ALTER TABLE transport_requests ADD COLUMN pickup_province TEXT");
+  if (!trCols.includes('pickup_district'))
+    db.exec("ALTER TABLE transport_requests ADD COLUMN pickup_district TEXT");
+  if (!trCols.includes('dropoff_province'))
+    db.exec("ALTER TABLE transport_requests ADD COLUMN dropoff_province TEXT");
+  if (!trCols.includes('dropoff_district'))
+    db.exec("ALTER TABLE transport_requests ADD COLUMN dropoff_district TEXT");
+  if (!trCols.includes('contact_email'))
+    db.exec("ALTER TABLE transport_requests ADD COLUMN contact_email TEXT");
 } catch (e) {
   console.warn('[db] migration skipped:', e);
 }
@@ -386,11 +402,11 @@ export function updateSmsStatus(
 export function listActiveListings(crop?: string) {
   const sql = `
     SELECT l.*,
-      u.full_name AS seller_name,
-      u.phone     AS seller_phone,
-      u.email     AS seller_email,
-      u.village   AS seller_village,
-      u.province  AS seller_province
+      COALESCE(l.seller_name, u.full_name, 'Zambian Farmer') AS seller_name,
+      COALESCE(l.seller_phone, u.phone) AS seller_phone,
+      COALESCE(l.seller_email, u.email) AS seller_email,
+      COALESCE(l.village, u.village) AS seller_village,
+      COALESCE(l.province, u.province) AS seller_province
     FROM listings l
     LEFT JOIN users u ON u.phone = l.seller_phone
     WHERE l.status = 'available'
@@ -401,24 +417,26 @@ export function listActiveListings(crop?: string) {
 }
 
 export function createListing(l: {
+  seller_name?: string;
   seller_phone: string;
   seller_email?: string;
   crop: string;
   quantity_kg: number;
   price_per_kg_zmw: number;
+  district?: string;
   village?: string;
   province?: string;
   description?: string;
 }) {
   const info = db.prepare(`
     INSERT INTO listings
-      (seller_phone, seller_email, crop, quantity_kg,
-       price_per_kg_zmw, village, province, description)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      (seller_name, seller_phone, seller_email, crop, quantity_kg,
+       price_per_kg_zmw, district, village, province, description)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
-    l.seller_phone, l.seller_email || null, l.crop,
+    l.seller_name || null, l.seller_phone, l.seller_email || null, l.crop,
     l.quantity_kg, l.price_per_kg_zmw,
-    l.village || null, l.province || null, l.description || null
+    l.district || null, l.village || null, l.province || null, l.description || null
   );
   return db.prepare('SELECT * FROM listings WHERE id = ?').get(info.lastInsertRowid as any);
 }

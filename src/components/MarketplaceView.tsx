@@ -15,7 +15,9 @@ import {
   X,
   Loader2,
   Package,
+  User,
 } from 'lucide-react';
+import { ZAMBIA_PROVINCE_LIST, getDistrictsForProvince } from '../data/zambiaLocations';
 
 interface Listing {
   id: number;
@@ -25,6 +27,7 @@ interface Listing {
   quantity_kg: number;
   price_per_kg_zmw: number;
   village?: string;
+  district?: string;
   province?: string;
   description?: string;
   status: string;
@@ -51,12 +54,18 @@ export function MarketplaceView() {
   const { data: prices } = usePolling<MarketPrice[]>('/api/marketplace/prices', 5000);
 
   const [selectedCrop, setSelectedCrop] = useState<string>('all');
+  const [selectedProvinceFilter, setSelectedProvinceFilter] = useState<string>('all');
   const [search, setSearch] = useState<string>('');
 
   // Order Modal
   const [orderModalListing, setOrderModalListing] = useState<Listing | null>(null);
   const [orderQty, setOrderQty] = useState<number>(1000);
-  const [deliveryAddress, setDeliveryAddress] = useState<string>('Lusaka Central Depot');
+  const [deliveryProvince, setDeliveryProvince] = useState<string>('Lusaka');
+  const [deliveryDistrict, setDeliveryDistrict] = useState<string>('Lusaka');
+  const [deliveryAddress, setDeliveryAddress] = useState<string>('Lusaka Central Depot, Great East Rd');
+  const [buyerName, setBuyerName] = useState<string>(user?.full_name || 'AgriBuyer Ltd');
+  const [buyerPhone, setBuyerPhone] = useState<string>(user?.phone || '+260970000003');
+  const [buyerEmail, setBuyerEmail] = useState<string>(user?.email || 'buyer@mundasense.zm');
   const [orderSubmitting, setOrderSubmitting] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
@@ -65,9 +74,13 @@ export function MarketplaceView() {
   const [newCrop, setNewCrop] = useState<string>('Maize');
   const [newQty, setNewQty] = useState<number>(5000);
   const [newPrice, setNewPrice] = useState<number>(6.5);
-  const [newVillage, setNewVillage] = useState<string>('Msekera');
-  const [newProvince, setNewProvince] = useState<string>('Eastern');
-  const [newDesc, setNewDesc] = useState<string>('');
+  const [newProvince, setNewProvince] = useState<string>('Western');
+  const [newDistrict, setNewDistrict] = useState<string>('Lukulu');
+  const [newVillage, setNewVillage] = useState<string>('Lukulu Central');
+  const [newDesc, setNewDesc] = useState<string>('Cleaned, bagged & moisture verified (12.5%)');
+  const [newSellerName, setNewSellerName] = useState<string>(user?.full_name || 'Lukulu Farmers Cooperative');
+  const [newSellerPhone, setNewSellerPhone] = useState<string>(user?.phone || '+260970000004');
+  const [newSellerEmail, setNewSellerEmail] = useState<string>(user?.email || 'farmer@mundasense.zm');
   const [listingSubmitting, setListingSubmitting] = useState<boolean>(false);
 
   const showToast = (msg: string) => {
@@ -81,15 +94,16 @@ export function MarketplaceView() {
 
     setOrderSubmitting(true);
     try {
-      const buyerPhone = user?.phone || '+260970000003';
       const res = await fetch('/api/marketplace/orders', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           listing_id: orderModalListing.id,
           buyer_phone: buyerPhone,
+          buyer_name: buyerName,
+          buyer_email: buyerEmail,
           quantity_kg: orderQty,
-          delivery_address: deliveryAddress,
+          delivery_address: `${deliveryAddress} (${deliveryDistrict}, ${deliveryProvince} Province)`,
         }),
       });
 
@@ -98,7 +112,7 @@ export function MarketplaceView() {
         throw new Error(err.error || `Error ${res.status}`);
       }
 
-      showToast(`Purchase order placed successfully for ${orderQty} kg of ${orderModalListing.crop}!`);
+      showToast(`Purchase order placed successfully for ${orderQty.toLocaleString()} kg of ${orderModalListing.crop}!`);
       setOrderModalListing(null);
       refreshListings();
     } catch (err: any) {
@@ -112,17 +126,17 @@ export function MarketplaceView() {
     e.preventDefault();
     setListingSubmitting(true);
     try {
-      const sellerPhone = user?.phone || '+260970000004';
-      const sellerEmail = user?.email || 'seller@mundasense.zm';
       const res = await fetch('/api/marketplace/listings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          seller_phone: sellerPhone,
-          seller_email: sellerEmail,
+          seller_name: newSellerName,
+          seller_phone: newSellerPhone,
+          seller_email: newSellerEmail,
           crop: newCrop,
           quantity_kg: newQty,
           price_per_kg_zmw: newPrice,
+          district: newDistrict,
           village: newVillage,
           province: newProvince,
           description: newDesc,
@@ -134,7 +148,7 @@ export function MarketplaceView() {
         throw new Error(err.error || `Error ${res.status}`);
       }
 
-      showToast(`Listing for ${newQty} kg ${newCrop} is now LIVE on the marketplace!`);
+      showToast(`Listing for ${newQty.toLocaleString()} kg ${newCrop} in ${newDistrict}, ${newProvince} is LIVE!`);
       setIsNewListingOpen(false);
       setNewDesc('');
       refreshListings();
@@ -147,10 +161,11 @@ export function MarketplaceView() {
 
   const filteredListings = (listings || []).filter((l) => {
     if (selectedCrop !== 'all' && l.crop.toLowerCase() !== selectedCrop.toLowerCase()) return false;
+    if (selectedProvinceFilter !== 'all' && (l.province || '').toLowerCase() !== selectedProvinceFilter.toLowerCase()) return false;
     if (search) {
       const q = search.toLowerCase();
       const matchCrop = l.crop.toLowerCase().includes(q);
-      const matchLoc = (l.village || '').toLowerCase().includes(q) || (l.province || '').toLowerCase().includes(q);
+      const matchLoc = (l.village || '').toLowerCase().includes(q) || (l.district || '').toLowerCase().includes(q) || (l.province || '').toLowerCase().includes(q);
       const matchSeller = (l.seller_name || '').toLowerCase().includes(q) || (l.seller_phone || '').includes(q);
       if (!matchCrop && !matchLoc && !matchSeller) return false;
     }
@@ -230,7 +245,7 @@ export function MarketplaceView() {
       {/* Filter and Search Bar */}
       <div className="flex flex-wrap items-center justify-between gap-3 bg-[#101b13] border border-[#1e3623] rounded-2xl p-3">
         <div className="flex items-center gap-1.5 flex-wrap">
-          {['all', 'Maize', 'Groundnuts', 'Soybeans', 'Sunflower', 'Cotton'].map((crop) => (
+          {['all', 'Maize', 'Groundnuts', 'Soybeans', 'Sunflower', 'Cotton', 'Rice', 'Cassava'].map((crop) => (
             <button
               key={crop}
               onClick={() => setSelectedCrop(crop)}
@@ -245,14 +260,33 @@ export function MarketplaceView() {
           ))}
         </div>
 
-        <div className="w-full sm:w-64">
-          <input
-            type="text"
-            placeholder="Search crop, seller, village..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full px-3 py-1.5 bg-[#142318] border border-[#233a27] rounded-xl text-xs text-gray-200 placeholder-gray-500 focus:outline-none focus:border-emerald-500"
-          />
+        <div className="flex items-center gap-2 flex-wrap w-full sm:w-auto">
+          {/* Province Filter Dropdown */}
+          <div className="flex items-center gap-1.5 bg-[#142318] border border-[#233a27] rounded-xl px-2.5 py-1.5 text-xs">
+            <span className="text-gray-400 text-[11px]">Province:</span>
+            <select
+              value={selectedProvinceFilter}
+              onChange={(e) => setSelectedProvinceFilter(e.target.value)}
+              className="bg-transparent text-emerald-400 font-semibold focus:outline-none cursor-pointer text-xs"
+            >
+              <option value="all" className="bg-[#142217] text-white">All Provinces</option>
+              {ZAMBIA_PROVINCE_LIST.map((p) => (
+                <option key={p} value={p} className="bg-[#142217] text-white">
+                  {p}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="w-full sm:w-56">
+            <input
+              type="text"
+              placeholder="Search crop, seller, village..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="w-full px-3 py-1.5 bg-[#142318] border border-[#233a27] rounded-xl text-xs text-gray-200 placeholder-gray-500 focus:outline-none focus:border-emerald-500"
+            />
+          </div>
         </div>
       </div>
 
@@ -290,8 +324,10 @@ export function MarketplaceView() {
                         )}
                       </div>
                       <div className="text-[11px] text-gray-400 font-mono mt-0.5 flex items-center gap-1">
-                        <MapPin className="w-3 h-3 text-emerald-500" />
-                        <span>{l.village || 'Zambia'}, {l.province || 'Province'}</span>
+                        <MapPin className="w-3 h-3 text-emerald-500 flex-shrink-0" />
+                        <span className="truncate">
+                          {l.village ? `${l.village}, ` : ''}{l.district ? `${l.district} District, ` : ''}{l.province || 'Zambia'}
+                        </span>
                       </div>
                     </div>
 
@@ -339,13 +375,14 @@ export function MarketplaceView() {
                     </p>
                   )}
 
-                  {/* Seller Contact Info (Crucial Requirement) */}
+                  {/* Seller Contact Info */}
                   <div className="pt-2 border-t border-[#1a2d1f] space-y-1.5 text-xs">
                     <div className="text-[10px] text-gray-400 uppercase font-mono font-semibold">
                       Seller / Cooperative Contact
                     </div>
-                    <div className="text-gray-200 font-semibold truncate">
-                      {l.seller_name || 'Smallholder Cooperative'}
+                    <div className="text-gray-200 font-semibold truncate flex items-center gap-1.5">
+                      <User className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0" />
+                      <span>{l.seller_name || 'Smallholder Cooperative'}</span>
                     </div>
 
                     <div className="flex flex-col gap-1 text-[11px] font-mono">
@@ -400,7 +437,7 @@ export function MarketplaceView() {
       {/* Place Order Modal */}
       {orderModalListing && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#101b13] border border-[#1e3623] rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+          <div className="bg-[#101b13] border border-[#1e3623] rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-[#1e3623] pb-3">
               <div>
                 <h3 className="text-base font-bold text-white">Purchase Order Confirmation</h3>
@@ -443,9 +480,47 @@ export function MarketplaceView() {
                 />
               </div>
 
+              {/* Delivery Province & District */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[11px] font-semibold text-gray-400 uppercase block mb-1">
+                    Delivery Province
+                  </label>
+                  <select
+                    value={deliveryProvince}
+                    onChange={(e) => {
+                      const p = e.target.value;
+                      setDeliveryProvince(p);
+                      const districts = getDistrictsForProvince(p);
+                      if (districts.length > 0) setDeliveryDistrict(districts[0]);
+                    }}
+                    className="w-full px-3 py-2 bg-[#152418] border border-[#233f28] rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
+                  >
+                    {ZAMBIA_PROVINCE_LIST.map((p) => (
+                      <option key={p} value={p}>{p}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-[11px] font-semibold text-gray-400 uppercase block mb-1">
+                    Delivery District
+                  </label>
+                  <select
+                    value={deliveryDistrict}
+                    onChange={(e) => setDeliveryDistrict(e.target.value)}
+                    className="w-full px-3 py-2 bg-[#152418] border border-[#233f28] rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
+                  >
+                    {getDistrictsForProvince(deliveryProvince).map((d) => (
+                      <option key={d} value={d}>{d}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
               <div>
                 <label className="text-[11px] font-semibold text-gray-400 uppercase block mb-1">
-                  Delivery Destination
+                  Delivery Destination / Depot Address
                 </label>
                 <input
                   type="text"
@@ -455,6 +530,44 @@ export function MarketplaceView() {
                   className="w-full px-3 py-2 bg-[#152418] border border-[#233f28] rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
                   required
                 />
+              </div>
+
+              {/* Buyer Contact Details */}
+              <div className="pt-2 border-t border-[#1e3623] space-y-2">
+                <div className="text-[11px] font-semibold text-emerald-400 uppercase">
+                  Buyer Contact Details
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[10px] text-gray-400 uppercase block mb-1">Buyer / Company Name</label>
+                    <input
+                      type="text"
+                      value={buyerName}
+                      onChange={(e) => setBuyerName(e.target.value)}
+                      className="w-full px-3 py-2 bg-[#152418] border border-[#233f28] rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-gray-400 uppercase block mb-1">Contact Phone</label>
+                    <input
+                      type="tel"
+                      value={buyerPhone}
+                      onChange={(e) => setBuyerPhone(e.target.value)}
+                      className="w-full px-3 py-2 bg-[#152418] border border-[#233f28] rounded-xl text-xs text-white font-mono focus:outline-none focus:border-emerald-500"
+                      required
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-[10px] text-gray-400 uppercase block mb-1">Contact Email</label>
+                  <input
+                    type="email"
+                    value={buyerEmail}
+                    onChange={(e) => setBuyerEmail(e.target.value)}
+                    className="w-full px-3 py-2 bg-[#152418] border border-[#233f28] rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
               </div>
 
               <div className="p-3 rounded-xl bg-[#0c160f] border border-[#1d3522] flex justify-between items-center font-mono">
@@ -491,7 +604,7 @@ export function MarketplaceView() {
       {/* New Listing Modal */}
       {isNewListingOpen && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#101b13] border border-[#1e3623] rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+          <div className="bg-[#101b13] border border-[#1e3623] rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-[#1e3623] pb-3">
               <div>
                 <h3 className="text-base font-bold text-white">Create New Marketplace Listing</h3>
@@ -505,43 +618,86 @@ export function MarketplaceView() {
               </button>
             </div>
 
-            <form onSubmit={handleCreateListing} className="space-y-3 text-xs">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-[11px] font-semibold text-gray-400 uppercase block mb-1">
-                    Commodity
-                  </label>
-                  <select
-                    value={newCrop}
-                    onChange={(e) => setNewCrop(e.target.value)}
-                    className="w-full px-3 py-2 bg-[#152418] border border-[#233f28] rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
-                  >
-                    <option value="Maize">Maize</option>
-                    <option value="Groundnuts">Groundnuts</option>
-                    <option value="Soybeans">Soybeans</option>
-                    <option value="Sunflower">Sunflower</option>
-                    <option value="Cotton">Cotton</option>
-                  </select>
-                </div>
+            <form onSubmit={handleCreateListing} className="space-y-3.5 text-xs">
+              {/* Commodity */}
+              <div>
+                <label className="text-[11px] font-semibold text-gray-400 uppercase block mb-1">
+                  Commodity
+                </label>
+                <select
+                  value={newCrop}
+                  onChange={(e) => setNewCrop(e.target.value)}
+                  className="w-full px-3 py-2 bg-[#152418] border border-[#233f28] rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
+                >
+                  <option value="Maize">Maize (White / Yellow)</option>
+                  <option value="Groundnuts">Groundnuts (Peanuts)</option>
+                  <option value="Soybeans">Soybeans</option>
+                  <option value="Sunflower">Sunflower Seed</option>
+                  <option value="Cotton">Cotton</option>
+                  <option value="Cassava">Cassava (Chips / Flour)</option>
+                  <option value="Rice">Rice (Lukulu / Mongu Paddy)</option>
+                  <option value="Wheat">Wheat</option>
+                  <option value="Coffee">Coffee</option>
+                  <option value="Beans">Mixed Beans / Sugar Beans</option>
+                  <option value="Sorghum">Sorghum</option>
+                  <option value="Millet">Millet</option>
+                </select>
+              </div>
 
+              {/* Province & District Dropdowns */}
+              <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-[11px] font-semibold text-gray-400 uppercase block mb-1">
                     Province
                   </label>
                   <select
                     value={newProvince}
-                    onChange={(e) => setNewProvince(e.target.value)}
+                    onChange={(e) => {
+                      const prov = e.target.value;
+                      setNewProvince(prov);
+                      const districts = getDistrictsForProvince(prov);
+                      if (districts.length > 0) setNewDistrict(districts[0]);
+                    }}
                     className="w-full px-3 py-2 bg-[#152418] border border-[#233f28] rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
                   >
-                    <option value="Eastern">Eastern</option>
-                    <option value="Lusaka">Lusaka</option>
-                    <option value="Central">Central</option>
-                    <option value="Southern">Southern</option>
-                    <option value="Copperbelt">Copperbelt</option>
+                    {ZAMBIA_PROVINCE_LIST.map((p) => (
+                      <option key={p} value={p}>{p}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-[11px] font-semibold text-gray-400 uppercase block mb-1">
+                    District
+                  </label>
+                  <select
+                    value={newDistrict}
+                    onChange={(e) => setNewDistrict(e.target.value)}
+                    className="w-full px-3 py-2 bg-[#152418] border border-[#233f28] rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
+                  >
+                    {getDistrictsForProvince(newProvince).map((d) => (
+                      <option key={d} value={d}>{d}</option>
+                    ))}
                   </select>
                 </div>
               </div>
 
+              {/* Village / Local Location */}
+              <div>
+                <label className="text-[11px] font-semibold text-gray-400 uppercase block mb-1">
+                  Village / District Location
+                </label>
+                <input
+                  type="text"
+                  value={newVillage}
+                  onChange={(e) => setNewVillage(e.target.value)}
+                  placeholder="e.g. Lukulu Central, Mitete turn-off, or Coop Shed"
+                  className="w-full px-3 py-2 bg-[#152418] border border-[#233f28] rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
+                  required
+                />
+              </div>
+
+              {/* Quantity & Price */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-[11px] font-semibold text-gray-400 uppercase block mb-1">
@@ -574,19 +730,7 @@ export function MarketplaceView() {
                 </div>
               </div>
 
-              <div>
-                <label className="text-[11px] font-semibold text-gray-400 uppercase block mb-1">
-                  Village / District Location
-                </label>
-                <input
-                  type="text"
-                  value={newVillage}
-                  onChange={(e) => setNewVillage(e.target.value)}
-                  className="w-full px-3 py-2 bg-[#152418] border border-[#233f28] rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
-                  required
-                />
-              </div>
-
+              {/* Batch Description */}
               <div>
                 <label className="text-[11px] font-semibold text-gray-400 uppercase block mb-1">
                   Batch Description / Quality Notes
@@ -598,6 +742,53 @@ export function MarketplaceView() {
                   placeholder="e.g. Moisture 12.5%, cleaned and bagged..."
                   className="w-full px-3 py-2 bg-[#152418] border border-[#233f28] rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
                 />
+              </div>
+
+              {/* Contact Details Section */}
+              <div className="pt-2 border-t border-[#1e3623] space-y-2">
+                <div className="text-[11px] font-semibold text-emerald-400 uppercase">
+                  Seller Contact Details
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[10px] text-gray-400 uppercase block mb-1">
+                      Farmer / Cooperative Name
+                    </label>
+                    <input
+                      type="text"
+                      value={newSellerName}
+                      onChange={(e) => setNewSellerName(e.target.value)}
+                      placeholder="e.g. Lukulu Farmers Union"
+                      className="w-full px-3 py-2 bg-[#152418] border border-[#233f28] rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-gray-400 uppercase block mb-1">
+                      Phone Number (Zambia)
+                    </label>
+                    <input
+                      type="tel"
+                      value={newSellerPhone}
+                      onChange={(e) => setNewSellerPhone(e.target.value)}
+                      placeholder="+260 970 000 000"
+                      className="w-full px-3 py-2 bg-[#152418] border border-[#233f28] rounded-xl text-xs text-white font-mono focus:outline-none focus:border-emerald-500"
+                      required
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-[10px] text-gray-400 uppercase block mb-1">
+                    Contact Email Address
+                  </label>
+                  <input
+                    type="email"
+                    value={newSellerEmail}
+                    onChange={(e) => setNewSellerEmail(e.target.value)}
+                    placeholder="farmer@mundasense.zm"
+                    className="w-full px-3 py-2 bg-[#152418] border border-[#233f28] rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
               </div>
 
               <div className="flex items-center gap-2 pt-2">

@@ -15,18 +15,22 @@ transportRouter.get('/transport/requests', (req: Request, res: Response) => {
 
 transportRouter.post('/transport/requests', async (req: Request, res: Response) => {
   const { requester_phone, pickup_location, dropoff_location,
-          cargo_description, weight_kg, budget_zmw, contact_name, contact_phone } = req.body;
+          pickup_province, pickup_district, dropoff_province, dropoff_district,
+          cargo_description, weight_kg, budget_zmw, contact_name, contact_phone, contact_email } = req.body;
   if (!requester_phone || !pickup_location || !dropoff_location) {
     return res.status(400).json({ error: 'requester_phone, pickup_location, dropoff_location required' });
   }
   const info = db.prepare(`
     INSERT INTO transport_requests
-      (requester_phone, pickup_location, dropoff_location, cargo_description,
-       weight_kg, budget_zmw, contact_name, contact_phone)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(requester_phone, pickup_location, dropoff_location,
+      (requester_phone, pickup_province, pickup_district, pickup_location,
+       dropoff_province, dropoff_district, dropoff_location, cargo_description,
+       weight_kg, budget_zmw, contact_name, contact_phone, contact_email)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(requester_phone,
+         pickup_province || null, pickup_district || null, pickup_location,
+         dropoff_province || null, dropoff_district || null, dropoff_location,
          cargo_description || null, weight_kg || null, budget_zmw || null,
-         contact_name || null, contact_phone || null);
+         contact_name || null, contact_phone || null, contact_email || null);
   const transporters = db.prepare(
     "SELECT phone FROM users WHERE role = 'transporter' AND phone IS NOT NULL"
   ).all() as any[];

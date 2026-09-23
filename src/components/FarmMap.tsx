@@ -171,20 +171,6 @@ export const FarmMap: React.FC<FarmMapProps> = ({ onScreenFarm }) => {
 
         {/* Controls right side */}
         <div className="flex items-center gap-2 flex-wrap">
-          {/* Quick Focus to Lukulu District */}
-          <button
-            onClick={() => {
-              setFocusDistrict('Lukulu');
-              setActiveCluster('Western');
-              setActiveProvinceFilter('Western');
-            }}
-            className="flex items-center gap-1 px-2.5 py-1 bg-amber-950/60 hover:bg-amber-900/80 border border-amber-700/80 text-amber-300 rounded-lg text-xs font-semibold transition cursor-pointer"
-            title="Center map on Lukulu District (-14.37, 23.24) to view 4 local depots"
-          >
-            <Navigation className="w-3.5 h-3.5" />
-            <span>Focus Lukulu (4 Depots)</span>
-          </button>
-
           {/* Map Type Mode Toggle */}
           <div className="flex items-center gap-1 p-1 bg-[#142318] border border-[#233a27] rounded-lg text-xs">
             <button
@@ -484,6 +470,37 @@ export const FarmMap: React.FC<FarmMapProps> = ({ onScreenFarm }) => {
                     </g>
                   );
                 })}
+
+              {/* Dedicated Lukulu District Landmark Tag (Always marked on map) */}
+              {(() => {
+                const { x, y } = mapProjection(-14.3707, 23.2425);
+                return (
+                  <g key="lukulu-landmark" className="select-none pointer-events-none">
+                    <rect
+                      x={x - 28}
+                      y={y - 23}
+                      width="56"
+                      height="15"
+                      rx="4"
+                      fill="#0b170e"
+                      fillOpacity="0.92"
+                      stroke="#10b981"
+                      strokeWidth="1.2"
+                    />
+                    <text
+                      x={x}
+                      y={y - 12}
+                      textAnchor="middle"
+                      fontSize="8.5"
+                      fill="#6ee7b7"
+                      fontWeight="bold"
+                      fontFamily="system-ui, sans-serif"
+                    >
+                      📍 Lukulu
+                    </text>
+                  </g>
+                );
+              })()}
 
               {/* Farm Markers */}
               {filteredFarms.map((farm) => {
