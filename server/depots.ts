@@ -73,7 +73,7 @@ export const ZAMBIA_DEPOTS: Depot[] = [
   { name: 'Sesheke Border Depot',             type: 'EXPORT_HUB',   province: 'Western',  district: 'Sesheke',        lat: -17.4833, lon: 24.3000, capacity_tons: 6000, operator: 'Sesheke Border Post',          phone: '+260970000135', email: 'sesheke@zra.gov.zm',     crops: ['Export Goods'] },
   { name: 'Kalabo Agro Depot',                type: 'AGRO_DEALER',  province: 'Western',  district: 'Kalabo',         lat: -14.9833, lon: 22.6833, capacity_tons: 800,  operator: 'Kalabo Agro Traders',          phone: '+260970000136', email: 'kalabo@agro.zm',         crops: ['Rice','Maize'] },
   /* Lukulu District Additions */
-  { name: 'Lukulu District Cooperative Union',  type: 'COOPERATIVE',  province: 'Western', district: 'Lukulu', lat: -14.3667, lon: 23.2333, capacity_tons: 1800, operator: 'Lukulu District Coop',          phone: '+260970000153', email: 'lukulu@coop.zm',          crops: ['Rice','Cassava','Maize'] },
+  { name: 'Lukulu District Cooperative Union',  type: 'COOPERATIVE',  province: 'Western', district: 'Lukulu', lat: -14.3707, lon: 23.2425, capacity_tons: 1800, operator: 'Lukulu District Coop',          phone: '+260970000153', email: 'lukulu@coop.zm',          crops: ['Rice','Cassava','Maize'] },
   { name: 'Lukulu FRA Depot',                   type: 'FRA_DEPOT',    province: 'Western', district: 'Lukulu', lat: -14.3800, lon: 23.2200, capacity_tons: 5000, operator: 'Food Reserve Agency',           phone: '+260970000154', email: 'lukulu@fra.gov.zm',       crops: ['Maize','Rice'] },
   { name: 'Lukulu Rice Millers',                type: 'MILLER_DEPOT', province: 'Western', district: 'Lukulu', lat: -14.3550, lon: 23.2450, capacity_tons: 2500, operator: 'Lukulu Rice Millers Ltd',       phone: '+260970000155', email: 'lukulu@ricemillers.zm',   crops: ['Rice'] },
   { name: 'Lukulu Fisheries Aggregation Hub',   type: 'COOPERATIVE',  province: 'Western', district: 'Lukulu', lat: -14.3900, lon: 23.2100, capacity_tons: 800,  operator: 'Lukulu Fisheries Cooperative',  phone: '+260970000156', email: 'lukulu@fisheries.zm',     crops: ['Fish','Rice','Cassava'] },
@@ -114,6 +114,13 @@ export const ZAMBIA_DEPOTS: Depot[] = [
 export function seedDepotsIfEmpty() {
   const count = (db.prepare('SELECT COUNT(*) as c FROM depots').get() as any)?.c || 0;
   const lukuluCount = (db.prepare("SELECT COUNT(*) as c FROM depots WHERE district = 'Lukulu'").get() as any)?.c || 0;
+
+  // Ensure Lukulu District Cooperative Union is positioned at its actual location in town, away from Zambezi river
+  db.prepare(`
+    UPDATE depots 
+    SET latitude = -14.3707, longitude = 23.2425 
+    WHERE name = 'Lukulu District Cooperative Union'
+  `).run();
 
   if (count === ZAMBIA_DEPOTS.length && lukuluCount === 4) {
     console.log(`[depots] Already seeded (${count} depots, 4 Lukulu)`);

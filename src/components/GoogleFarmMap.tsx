@@ -101,8 +101,8 @@ export function GoogleFarmMap({
   useEffect(() => {
     if (!mapRef.current) return;
     if (focusDistrict === 'Lukulu') {
-      mapRef.current.setCenter({ lat: -14.37, lng: 23.23 });
-      mapRef.current.setZoom(12);
+      mapRef.current.setCenter({ lat: -14.3707, lng: 23.2425 });
+      mapRef.current.setZoom(13);
     }
   }, [focusDistrict]);
 
@@ -123,9 +123,13 @@ export function GoogleFarmMap({
     markersRef.current = [];
     boundariesRef.current = [];
 
+    const safeDepots = Array.isArray(depots) ? depots : [];
+    const safeFarms = Array.isArray(farms) ? farms : [];
+    const safeHubs = Array.isArray(hubs) ? hubs : [];
+
     // 1. Depots (rendered below farm pins: zIndex 100)
-    if (showDepots && depots && depots.length > 0) {
-      const filteredDepots = depots.filter((d: any) => {
+    if (showDepots && safeDepots.length > 0) {
+      const filteredDepots = safeDepots.filter((d: any) => {
         if (depotTypeFilter && d.type !== depotTypeFilter) return false;
         return true;
       });
@@ -207,7 +211,7 @@ export function GoogleFarmMap({
     }
 
     // 2. Hubs with live sensor data
-    hubs.forEach((h) => {
+    safeHubs.forEach((h) => {
       if (!h.latitude || !h.longitude) return;
       const center = { lat: h.latitude, lng: h.longitude };
 
@@ -281,7 +285,7 @@ export function GoogleFarmMap({
     });
 
     // 3. Farm markers (zIndex 500)
-    farms.forEach((f) => {
+    safeFarms.forEach((f) => {
       if (!f.latitude || !f.longitude) return;
       const color = COLORS[f.health_status as keyof typeof COLORS] || '#666';
 

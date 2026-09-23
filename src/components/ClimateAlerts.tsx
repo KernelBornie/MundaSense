@@ -16,7 +16,6 @@ import {
   CloudLightning,
   Sparkles,
 } from 'lucide-react';
-import { usePolling } from '../hooks/usePolling';
 
 interface DistrictForecast {
   day: string;

@@ -48,7 +48,8 @@ export const FarmMap: React.FC<FarmMapProps> = ({ onScreenFarm }) => {
   } = useApp();
 
   const { hubs: liveHubs } = useLiveFarmData();
-  const { data: depots = [] } = usePolling<any[]>('/api/depots', 30000);
+  const { data: rawDepots } = usePolling<any[]>('/api/depots', 30000, []);
+  const depots = useMemo(() => (Array.isArray(rawDepots) ? rawDepots : []), [rawDepots]);
 
   const [mapMode, setMapMode] = useState<'google' | 'vector'>('google');
   const [searchQuery, setSearchQuery] = useState('');
@@ -60,7 +61,7 @@ export const FarmMap: React.FC<FarmMapProps> = ({ onScreenFarm }) => {
   const [quickSmsText, setQuickSmsText] = useState('Inspect lower leaves after rain.');
 
   const hubsWithLive = useMemo(() => {
-    return hubs.map((h) => ({
+    return (hubs || []).map((h) => ({
       ...h,
       live: liveHubs[h.id] || undefined,
     }));
@@ -68,7 +69,7 @@ export const FarmMap: React.FC<FarmMapProps> = ({ onScreenFarm }) => {
 
   // Filtering farms
   const filteredFarms = useMemo(() => {
-    return farms.filter((farm) => {
+    return (farms || []).filter((farm) => {
       if (activeCluster !== 'all' && farm.province !== activeCluster) return false;
       if (activeProvinceFilter !== 'all' && farm.province !== activeProvinceFilter) return false;
       if (activeCropFilter !== 'all' && farm.crop !== activeCropFilter) return false;
@@ -88,7 +89,7 @@ export const FarmMap: React.FC<FarmMapProps> = ({ onScreenFarm }) => {
 
   // Filtering depots
   const filteredDepots = useMemo(() => {
-    if (!showDepots || !depots) return [];
+    if (!showDepots || !Array.isArray(depots)) return [];
     return depots.filter((d: any) => {
       if (depotTypeFilter && d.type !== depotTypeFilter) return false;
       if (activeProvinceFilter !== 'all' && d.province !== activeProvinceFilter) return false;
@@ -130,10 +131,11 @@ export const FarmMap: React.FC<FarmMapProps> = ({ onScreenFarm }) => {
     }
   };
 
-  const totalFarmCount = farms.length || 551;
-  const healthyCount = farms.filter((f) => f.health_status === 'healthy').length;
-  const watchCount = farms.filter((f) => f.health_status === 'watch').length;
-  const alertCount = farms.filter((f) => f.health_status === 'alert').length;
+  const totalFarmCount = (farms?.length) || 551;
+  const healthyCount = (farms || []).filter((f) => f.health_status === 'healthy').length;
+  const watchCount = (farms || []).filter((f) => f.health_status === 'watch').length;
+  const alertCount = (farms || []).filter((f) => f.health_status === 'alert').length;
+  const hubCount = (hubs?.length) || 15;
 
   const ALL_PROVINCES: (Province | 'all')[] = [
     'all',
@@ -162,7 +164,7 @@ export const FarmMap: React.FC<FarmMapProps> = ({ onScreenFarm }) => {
               Zambia Agri-IoT &amp; Depots Operations Map
             </h2>
             <p className="text-[11px] text-gray-400">
-              Real-time monitoring across {totalFarmCount} smallholder plots · {depots.length || 47} Strategic Depots · {hubs.length || 15} LoRaWAN Hubs · 10 Provinces
+              Real-time monitoring across {totalFarmCount} smallholder plots · {(depots?.length) || 47} Strategic Depots · {hubCount} LoRaWAN Hubs · 10 Provinces
             </p>
           </div>
         </div>
@@ -177,7 +179,7 @@ export const FarmMap: React.FC<FarmMapProps> = ({ onScreenFarm }) => {
               setActiveProvinceFilter('Western');
             }}
             className="flex items-center gap-1 px-2.5 py-1 bg-amber-950/60 hover:bg-amber-900/80 border border-amber-700/80 text-amber-300 rounded-lg text-xs font-semibold transition cursor-pointer"
-            title="Center map on Lukulu District (-14.37, 23.23) to view 4 local depots"
+            title="Center map on Lukulu District (-14.37, 23.24) to view 4 local depots"
           >
             <Navigation className="w-3.5 h-3.5" />
             <span>Focus Lukulu (4 Depots)</span>
@@ -257,7 +259,7 @@ export const FarmMap: React.FC<FarmMapProps> = ({ onScreenFarm }) => {
               className="accent-emerald-500 rounded cursor-pointer"
             />
             <span className="text-gray-200 font-medium">
-              Show Depots ({depots.length || 47})
+              Show Depots ({(depots?.length) || 47})
             </span>
           </label>
 
@@ -325,7 +327,7 @@ export const FarmMap: React.FC<FarmMapProps> = ({ onScreenFarm }) => {
             <span className="w-2.5 h-2.5 rounded-full bg-rose-500 inline-block" /> Alert ({alertCount})
           </span>
           <span className="flex items-center gap-1 text-red-300 font-medium">
-            <Radio className="w-3.5 h-3.5 text-rose-500" /> {hubs.length || 15} LoRaWAN Hubs
+            <Radio className="w-3.5 h-3.5 text-rose-500" /> {hubCount} LoRaWAN Hubs
           </span>
         </div>
 
@@ -396,7 +398,7 @@ export const FarmMap: React.FC<FarmMapProps> = ({ onScreenFarm }) => {
               </g>
 
               {/* Hub Coverage Radius Circles */}
-              {hubs.map((hub) => {
+              {(hubs || []).map((hub) => {
                 const { x, y } = mapProjection(hub.latitude, hub.longitude);
                 return (
                   <g key={hub.id}>

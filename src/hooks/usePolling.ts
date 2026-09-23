@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 
-export function usePolling<T = any>(url: string | null, intervalMs = 5000) {
-  const [data, setData] = useState<T | null>(null);
+export function usePolling<T = any>(url: string | null, intervalMs = 5000, initialData: T | null = null) {
+  const [data, setData] = useState<T | null>(initialData);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [tick, setTick] = useState(0);
