@@ -118,11 +118,17 @@ export function FarmsView({ onScreenFarm }: FarmsViewProps) {
             onChange={(e) => setProvinceFilter(e.target.value)}
             className="px-3 py-1.5 bg-[#142318] border border-[#233a27] rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
           >
-            <option value="all">All Provinces</option>
-            <option value="Eastern">Eastern Province</option>
-            <option value="Lusaka">Lusaka Province</option>
-            <option value="Central">Central Province</option>
-            <option value="Southern">Southern Province</option>
+            <option value="all">All Provinces (10)</option>
+            <option value="Central">Central</option>
+            <option value="Copperbelt">Copperbelt</option>
+            <option value="Eastern">Eastern</option>
+            <option value="Luapula">Luapula</option>
+            <option value="Lusaka">Lusaka</option>
+            <option value="Muchinga">Muchinga</option>
+            <option value="Northern">Northern</option>
+            <option value="North-Western">North-Western</option>
+            <option value="Southern">Southern</option>
+            <option value="Western">Western</option>
           </select>
 
           {/* Crop Filter */}

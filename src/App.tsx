@@ -7,6 +7,8 @@ import { Navbar } from './components/Navbar';
 import { HackathonDemoModal } from './components/HackathonDemoModal';
 import { SensorPacketModal } from './components/SensorPacketModal';
 import { CodeViewerModal } from './components/CodeViewerModal';
+import { ClimateAlerts } from './components/ClimateAlerts';
+import { usePolling } from './hooks/usePolling';
 
 import { DashboardView } from './views/DashboardView';
 import { FarmsView } from './views/FarmsView';
@@ -26,6 +28,11 @@ function MainLayout() {
   const [isSensorModalOpen, setIsSensorModalOpen] = useState(false);
   const [isCodeModalOpen, setIsCodeModalOpen] = useState(false);
   const [screeningFarmId, setScreeningFarmId] = useState<number>(14);
+
+  const { data: health } = usePolling<any>('/api/health', 15000);
+  const farmCount = health?.farm_count || 551;
+  const depotCount = health?.depots_total || 47;
+  const hubCount = health?.hubs_online || 15;
 
   if (loading) {
     return (
@@ -66,6 +73,7 @@ function MainLayout() {
           <DashboardView setActiveTab={setActiveTab} onScreenFarm={handleScreenFarm} />
         )}
         {activeTab === 'farms' && <FarmsView onScreenFarm={handleScreenFarm} />}
+        {activeTab === 'climate' && <ClimateAlerts />}
         {activeTab === 'sensors' && <SensorsView onOpenSensorModal={() => setIsSensorModalOpen(true)} />}
         {activeTab === 'disease' && <DiseaseScreeningView initialFarmId={screeningFarmId} />}
         {activeTab === 'advisories' && <AdvisoryView />}
@@ -92,7 +100,9 @@ function MainLayout() {
             <span>·</span>
             <span>LoRaWAN EU868</span>
             <span>·</span>
-            <span className="text-emerald-400">108 Farms / 3 Hubs</span>
+            <span className="text-emerald-400 font-semibold">
+              {farmCount} Farms / {depotCount} Depots / {hubCount} Hubs
+            </span>
           </div>
         </div>
       </footer>

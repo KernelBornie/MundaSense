@@ -1,6 +1,6 @@
 {
   "name": "MundaSense · Smart Agriculture Platform",
-  "description": "AI-assisted crop disease screening, IoT soil & weather telemetry, USSD/SMS/IVR communication, 108-farm monitoring, and agricultural marketplace for Zambian smallholders.",
+  "description": "AI-assisted crop disease screening, IoT soil & weather telemetry, USSD/SMS/IVR communication, nationwide 550-farm monitoring across all 10 provinces, and agricultural marketplace for Zambian smallholders.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

@@ -11,22 +11,27 @@ import {
 } from './db.ts';
 import { getTreatmentPlan, estimateTreatmentCost, DiseaseTreatmentPlan } from './treatmentDatabase.ts';
 
-const GEMINI_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
 const GEMINI_MODEL = 'gemini-2.5-flash';
 
-let ai: GoogleGenAI | null = null;
-if (GEMINI_KEY) {
-  ai = new GoogleGenAI({
-    apiKey: GEMINI_KEY,
+let cachedAi: GoogleGenAI | null = null;
+let lastKey = '';
+
+export function getGenAI(): GoogleGenAI | null {
+  const key = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+  if (!key) return null;
+  if (cachedAi && lastKey === key) return cachedAi;
+  lastKey = key;
+  cachedAi = new GoogleGenAI({
+    apiKey: key,
     httpOptions: { headers: { 'User-Agent': 'mundasense-disease-v2' } },
   });
   console.log('[Disease] Gemini vision ENABLED (' + GEMINI_MODEL + ')');
-} else {
-  console.log('[Disease] Gemini OFFLINE — using rule-based fallback');
+  return cachedAi;
 }
 
 export function geminiStatus() {
-  return { enabled: Boolean(ai), model: ai ? GEMINI_MODEL : null };
+  const client = getGenAI();
+  return { enabled: Boolean(client), model: client ? GEMINI_MODEL : null };
 }
 
 /* ============================================================
@@ -325,9 +330,10 @@ export async function analyzeLeafImage(
   const [, mimeType, base64Data] = match;
 
   let result: DiseaseAnalysisResult;
-  if (ai) {
+  const client = getGenAI();
+  if (client) {
     try {
-      result = await callGemini(mimeType, base64Data, cropHint, farmContext, weatherContext);
+      result = await callGemini(client, mimeType, base64Data, cropHint, farmContext, weatherContext);
     } catch (e: any) {
       console.warn('[Disease] Gemini failed:', e.message);
       result = fallbackAnalysis(cropHint, imageDataUrl);
@@ -378,17 +384,16 @@ export async function analyzeLeafImage(
    Gemini call
    ============================================================ */
 async function callGemini(
+  client: GoogleGenAI,
   mimeType: string,
   base64Data: string,
   cropHint: string,
   farmContext: string,
   weatherContext: string
 ): Promise<DiseaseAnalysisResult> {
-  if (!ai) throw new Error('Gemini not configured');
-
   const prompt = buildPrompt(cropHint, farmContext, weatherContext);
 
-  const response = await ai.models.generateContent({
+  const response = await client.models.generateContent({
     model: GEMINI_MODEL,
     contents: {
       parts: [

@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
+import { usePolling } from '../hooks/usePolling';
 import { Role } from '../types';
 import {
   Sprout,
@@ -16,6 +17,9 @@ import {
   Truck,
   Building2,
   LogOut,
+  Wifi,
+  WifiOff,
+  CloudSun,
 } from 'lucide-react';
 
 interface NavbarProps {
@@ -42,20 +46,52 @@ export const Navbar: React.FC<NavbarProps> = ({
     resetDemoData,
   } = useApp();
 
+  const { data: health } = usePolling<any>('/api/health', 10000);
+  const farmCount = health?.farm_count || stats.totalFarms || 551;
+  const depotCount = health?.depots_total || 47;
+  const hubCount = health?.hubs_online || 15;
+
+  const [isOnline, setIsOnline] = useState(
+    typeof navigator !== 'undefined' ? navigator.onLine : true
+  );
+
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
   const roleOptions: { role: Role; label: string; icon: React.ReactNode; color: string }[] = [
-    { role: 'admin', label: 'Admin (Extension)', icon: <Shield className="w-3.5 h-3.5" />, color: 'bg-emerald-950 text-emerald-300 border-emerald-800' },
-    { role: 'farmer', label: 'Farmer (Chanda Mwape)', icon: <User className="w-3.5 h-3.5" />, color: 'bg-amber-950 text-amber-300 border-amber-800' },
-    { role: 'seller', label: 'Cooperative Union', icon: <Building2 className="w-3.5 h-3.5" />, color: 'bg-blue-950 text-blue-300 border-blue-800' },
-    { role: 'customer', label: 'Buyer (National Milling)', icon: <ShoppingBag className="w-3.5 h-3.5" />, color: 'bg-purple-950 text-purple-300 border-purple-800' },
+    { role: 'farmer', label: 'Farmer (Smallholder)', icon: <User className="w-3.5 h-3.5" />, color: 'bg-emerald-950 text-emerald-300 border-emerald-800' },
+    { role: 'admin', label: 'Admin (Field Officer)', icon: <Shield className="w-3.5 h-3.5" />, color: 'bg-blue-950 text-blue-300 border-blue-800' },
+    { role: 'seller', label: 'Seller (Agro Dealer)', icon: <Building2 className="w-3.5 h-3.5" />, color: 'bg-teal-950 text-teal-300 border-teal-800' },
+    { role: 'customer', label: 'Customer (Grain Offtaker)', icon: <ShoppingBag className="w-3.5 h-3.5" />, color: 'bg-purple-950 text-purple-300 border-purple-800' },
     { role: 'transporter', label: 'Transporter (ZamCargo)', icon: <Truck className="w-3.5 h-3.5" />, color: 'bg-orange-950 text-orange-300 border-orange-800' },
   ];
 
   return (
     <header className="border-b border-[#1f3124] bg-[#0c140f]/95 backdrop-blur sticky top-0 z-40">
+      {/* Offline Status Warning Banner */}
+      {!isOnline && (
+        <div className="bg-rose-950 border-b border-rose-700/80 px-4 py-1.5 text-xs text-rose-200 flex items-center justify-center gap-2 font-medium animate-pulse">
+          <WifiOff className="w-4 h-4 text-rose-400 flex-shrink-0" />
+          <span>
+            <b>Offline Mode:</b> Network connectivity lost. Sensor telemetry updates, SMS dispatch, and cloud sync are paused. Local cached data remains active.
+          </span>
+        </div>
+      )}
+
       {/* Top Banner with Stats and Actions */}
       <div className="max-w-7xl mx-auto px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs">
-        {/* Brand */}
-        <div className="flex items-center gap-3">
+        {/* Brand & Nationwide Counters */}
+        <div className="flex items-center gap-3 flex-wrap">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-500 to-emerald-700 flex items-center justify-center text-white shadow-md shadow-emerald-900/40">
               <Sprout className="w-5 h-5 text-white" />
@@ -74,9 +110,9 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
 
           <div className="hidden lg:flex items-center gap-2 ml-4 pl-4 border-l border-[#1f3124]">
-            <span className="flex items-center gap-1.5 text-gray-300 font-medium">
+            <span className="flex items-center gap-1.5 text-gray-200 font-semibold bg-[#132217] px-2.5 py-1 rounded-lg border border-[#203625]">
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              108 Farms (3 Hubs)
+              <span>{farmCount} Farms · {depotCount} Depots</span>
             </span>
             <span className="text-gray-600">·</span>
             <span className="flex items-center gap-1 text-emerald-400 font-semibold">
@@ -93,8 +129,30 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
         </div>
 
-        {/* Global Toolbar Actions */}
+        {/* Global Toolbar Actions & Offline Indicator */}
         <div className="flex items-center gap-2 flex-wrap">
+          {/* Offline / Online Sync Status Indicator */}
+          <div className="flex items-center mr-1">
+            {isOnline ? (
+              <span
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-950/70 border border-emerald-800/80 text-[11px] font-mono text-emerald-300"
+                title="Connected to MundaSense Cloud. Telemetry and SMS sync active."
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                <Wifi className="w-3 h-3 text-emerald-400" />
+                <span>Sync Active</span>
+              </span>
+            ) : (
+              <span
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-rose-950/90 border border-rose-600 text-[11px] font-mono text-rose-200"
+                title="Network disconnected. Telemetry, SMS, and database sync paused."
+              >
+                <WifiOff className="w-3 h-3 text-rose-400 animate-bounce" />
+                <span>Offline · Sync Paused</span>
+              </span>
+            )}
+          </div>
+
           {/* 15-Step Hackathon Demo Launcher */}
           <button
             onClick={startGuidedDemo}
@@ -133,7 +191,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           <button
             onClick={resetDemoData}
             className="p-1.5 text-gray-400 hover:text-gray-200 hover:bg-[#19271c] rounded-lg transition cursor-pointer"
-            title="Reset to 82-18-8 baseline"
+            title="Reset to baseline"
           >
             <RotateCcw className="w-3.5 h-3.5" />
           </button>
@@ -158,7 +216,8 @@ export const Navbar: React.FC<NavbarProps> = ({
         <nav className="flex items-center gap-1 py-1 min-w-max">
           {[
             { id: 'dashboard', label: 'Operations Map' },
-            { id: 'farms', label: '108 Farms Directory' },
+            { id: 'farms', label: `${farmCount} Farms Directory` },
+            { id: 'climate', label: 'Climate Risk Radar' },
             { id: 'sensors', label: 'IoT Sensor Hubs' },
             { id: 'disease', label: 'AI Disease Screening' },
             { id: 'advisories', label: 'Advisory Engine' },

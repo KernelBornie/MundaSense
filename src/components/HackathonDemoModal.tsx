@@ -28,8 +28,8 @@ export const HACKATHON_STEPS: StepInfo[] = [
   {
     step: 1,
     tab: 'dashboard',
-    title: '1. Show 108 Farms on Map',
-    description: 'Display 108 smallholder farms monitored across 3 agro-ecological hubs in Zambia: Eastern (Msekera), Lusaka (Chongwe), and Central (Mkushi). Notice the 82 Healthy (green), 18 Watch (yellow), and 8 Alert (red) status breakdown.',
+    title: '1. Show 550+ Farms Across Zambia',
+    description: 'Display 550+ smallholder farms monitored across 15 agro-ecological hubs covering all 10 Zambian provinces: Eastern, Lusaka, Central, Copperbelt, Southern, Western, Northern, Luapula, Muchinga, and North-Western. Notice the live Healthy (green), Watch (yellow), and Alert (red) status breakdown.',
     actionLabel: 'View Map & Telemetry',
     rolePrompt: 'Viewing as Admin / Agro-Extension Officer',
   },

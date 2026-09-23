@@ -5,6 +5,30 @@ const GOOGLE_MAPS_KEY = 'AIzaSyD6u5Uwcfn-wUUEMVSp0wP4kS6s5NZl-L8';
 
 const COLORS = { healthy: '#22c55e', watch: '#f59e0b', alert: '#ef4444' };
 
+export const DEPOT_COLORS: Record<string, string> = {
+  FRA_DEPOT: '#1e40af',
+  COOPERATIVE: '#16a34a',
+  AGRO_DEALER: '#d97706',
+  MILLER_DEPOT: '#7c3aed',
+  EXPORT_HUB: '#dc2626',
+};
+
+export const DEPOT_ICONS: Record<string, string> = {
+  FRA_DEPOT: '🏛️',
+  COOPERATIVE: '🤝',
+  AGRO_DEALER: '🏪',
+  MILLER_DEPOT: '🏭',
+  EXPORT_HUB: '🚢',
+};
+
+export const DEPOT_TYPE_LABELS: Record<string, string> = {
+  FRA_DEPOT: 'FRA Depot',
+  COOPERATIVE: 'Cooperative',
+  AGRO_DEALER: 'Agro Dealer',
+  MILLER_DEPOT: 'Miller',
+  EXPORT_HUB: 'Export Hub',
+};
+
 declare global {
   interface Window {
     google: any;
@@ -15,11 +39,24 @@ declare global {
 interface Props {
   farms: Farm[];
   hubs: (SensorHub & { live?: any })[];
+  depots?: any[];
+  showDepots?: boolean;
+  depotTypeFilter?: string;
+  focusDistrict?: string;
   onFarmClick?: (farm: Farm) => void;
   tickCount?: number;
 }
 
-export function GoogleFarmMap({ farms, hubs, onFarmClick, tickCount = 0 }: Props) {
+export function GoogleFarmMap({
+  farms,
+  hubs,
+  depots = [],
+  showDepots = true,
+  depotTypeFilter = '',
+  focusDistrict = '',
+  onFarmClick,
+  tickCount = 0,
+}: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
   const markersRef = useRef<any[]>([]);
@@ -46,7 +83,7 @@ export function GoogleFarmMap({ farms, hubs, onFarmClick, tickCount = 0 }: Props
   function initMap() {
     if (!ref.current || mapRef.current || !window.google?.maps) return;
     mapRef.current = new window.google.maps.Map(ref.current, {
-      center: { lat: -14.5, lng: 30.5 },
+      center: { lat: -13.5, lng: 28.0 },
       zoom: 6,
       mapTypeId: 'hybrid',
       mapTypeControl: true,
@@ -60,11 +97,20 @@ export function GoogleFarmMap({ farms, hubs, onFarmClick, tickCount = 0 }: Props
     drawAll();
   }
 
+  // Handle focus changes (e.g. Lukulu)
+  useEffect(() => {
+    if (!mapRef.current) return;
+    if (focusDistrict === 'Lukulu') {
+      mapRef.current.setCenter({ lat: -14.37, lng: 23.23 });
+      mapRef.current.setZoom(12);
+    }
+  }, [focusDistrict]);
+
   // Redraw on updates
   useEffect(() => {
     if (mapRef.current) drawAll();
     // eslint-disable-next-line
-  }, [farms, hubs, tickCount]);
+  }, [farms, hubs, depots, showDepots, depotTypeFilter, tickCount]);
 
   function drawAll() {
     const map = mapRef.current;
@@ -77,7 +123,90 @@ export function GoogleFarmMap({ farms, hubs, onFarmClick, tickCount = 0 }: Props
     markersRef.current = [];
     boundariesRef.current = [];
 
-    // Hubs with live sensor data
+    // 1. Depots (rendered below farm pins: zIndex 100)
+    if (showDepots && depots && depots.length > 0) {
+      const filteredDepots = depots.filter((d: any) => {
+        if (depotTypeFilter && d.type !== depotTypeFilter) return false;
+        return true;
+      });
+
+      filteredDepots.forEach((d: any) => {
+        const lat = Number(d.lat ?? d.latitude);
+        const lon = Number(d.lon ?? d.longitude);
+        if (isNaN(lat) || isNaN(lon)) return;
+
+        const color = DEPOT_COLORS[d.type] || '#16a34a';
+        const icon = DEPOT_ICONS[d.type] || '📍';
+        const label = DEPOT_TYPE_LABELS[d.type] || d.type;
+
+        const marker = new g.Marker({
+          map,
+          position: { lat, lng: lon },
+          icon: {
+            url:
+              'data:image/svg+xml;utf8,' +
+              encodeURIComponent(`
+              <svg xmlns="http://www.w3.org/2000/svg" width="34" height="34">
+                <circle cx="17" cy="17" r="15" fill="${color}" stroke="#fff" stroke-width="3"/>
+                <text x="17" y="23" text-anchor="middle" font-size="16">${icon}</text>
+              </svg>`),
+            scaledSize: new g.Size(34, 34),
+            anchor: new g.Point(17, 17),
+          },
+          title: `${d.name} (${label})`,
+          zIndex: 100,
+        });
+
+        const popupHtml = `
+          <div style="font-family:system-ui;min-width:280px;color:#111;">
+            <div style="
+              background:${color};color:white;
+              padding:8px 12px;margin:-13px -20px 12px;
+              border-radius:8px 8px 0 0;
+              font-weight:800;font-size:14px;">
+              ${icon} ${d.name}
+            </div>
+            <div style="font-size:12px;line-height:1.7;">
+              <div style="margin-bottom:6px;">
+                <span style="
+                  background:${color};color:white;
+                  padding:2px 8px;border-radius:12px;
+                  font-size:10px;font-weight:700;text-transform:uppercase;">
+                  ${label}
+                </span>
+              </div>
+              <div><b>Location:</b> ${d.district} District, ${d.province} Province</div>
+              <div><b>Operator:</b> ${d.operator}</div>
+              <div><b>Capacity:</b> ${(d.capacity_tons || 0).toLocaleString()} tons</div>
+              <div><b>Crops:</b> ${(Array.isArray(d.crops) ? d.crops : []).join(', ')}</div>
+              <div style="margin-top:10px;padding-top:10px;border-top:1px solid #eee;">
+                <a href="tel:${d.phone}" style="
+                  display:block;padding:6px;margin-bottom:4px;
+                  background:${color};color:white;
+                  text-align:center;border-radius:6px;
+                  text-decoration:none;font-weight:700;font-size:11px;">
+                  📞 Call ${d.phone}
+                </a>
+                <a href="mailto:${d.email}" style="
+                  display:block;padding:6px;
+                  background:white;color:${color};
+                  border:1.5px solid ${color};
+                  text-align:center;border-radius:6px;
+                  text-decoration:none;font-weight:700;font-size:11px;">
+                  ✉️ Email
+                </a>
+              </div>
+            </div>
+          </div>
+        `;
+
+        const info = new g.InfoWindow({ content: popupHtml });
+        marker.addListener('click', () => info.open(map, marker));
+        markersRef.current.push(marker);
+      });
+    }
+
+    // 2. Hubs with live sensor data
     hubs.forEach((h) => {
       if (!h.latitude || !h.longitude) return;
       const center = { lat: h.latitude, lng: h.longitude };
@@ -151,7 +280,7 @@ export function GoogleFarmMap({ farms, hubs, onFarmClick, tickCount = 0 }: Props
       markersRef.current.push(marker);
     });
 
-    // Farm markers
+    // 3. Farm markers (zIndex 500)
     farms.forEach((f) => {
       if (!f.latitude || !f.longitude) return;
       const color = COLORS[f.health_status as keyof typeof COLORS] || '#666';
@@ -168,6 +297,7 @@ export function GoogleFarmMap({ farms, hubs, onFarmClick, tickCount = 0 }: Props
           strokeWeight: 1.5,
         },
         title: `${f.name} · ${f.village}`,
+        zIndex: 500,
       });
 
       const popupContent = `

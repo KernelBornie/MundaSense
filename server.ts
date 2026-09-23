@@ -17,6 +17,8 @@ import {
 import { handleUssd } from './server/ussd.ts';
 import { sendSms, sendBulkSms, getAccountBalance } from './server/sms.ts';
 import { seedDatabase } from './server/seed.ts';
+import { depotsRouter, seedDepotsIfEmpty } from './server/depots.ts';
+import { farmsRouter } from './server/farms.ts';
 import {
   analyzeLeafImage,
   getRecentReports,
@@ -33,6 +35,13 @@ dotenv.config();
 
 /* Boot: seed DB if empty */
 seedDatabase();
+seedDepotsIfEmpty();
+const lukuluBootCount = (db.prepare("SELECT COUNT(*) as c FROM depots WHERE district = 'Lukulu'").get() as any)?.c || 0;
+console.log(`[boot] Lukulu depots: ${lukuluBootCount}`);
+if (lukuluBootCount === 0) {
+  console.warn('[boot] ⚠️  Lukulu depots missing. Forcing reseed...');
+  seedDepotsIfEmpty();
+}
 
 const app = express();
 const PORT = 3000;
@@ -526,14 +535,8 @@ app.use('/api', advisoriesRouter);
 app.use('/api', sensorsRouter);
 app.use('/api', storageRouter);
 app.use('/api', transportRouter);
-
-/* ============================================================
-   FARMS (REAL DB)
-   ============================================================ */
-app.get('/api/farms', (_req: Request, res: Response) => {
-  const farms = db.prepare('SELECT * FROM farms ORDER BY id LIMIT 200').all();
-  res.json(farms);
-});
+app.use('/api', depotsRouter);
+app.use('/api', farmsRouter);
 
 /* ============================================================
    DISEASE SCREENING (REAL GEMINI 2.5 FLASH VISION + SQLITE)
@@ -614,16 +617,25 @@ app.get('/api/disease/treatment/:diseaseName', (req: Request, res: Response) => 
 app.get('/api/health', (_req: Request, res: Response) => {
   const usersCount = (db.prepare('SELECT COUNT(*) as c FROM users').get() as any)?.c || 0;
   const farmsCount = (db.prepare('SELECT COUNT(*) as c FROM farms').get() as any)?.c || 0;
+  const districtCount = (db.prepare('SELECT COUNT(DISTINCT district) as c FROM farms').get() as any)?.c || 0;
+  const provincesCount = (db.prepare('SELECT COUNT(DISTINCT province) as c FROM farms').get() as any)?.c || 0;
+  const hubsCount = (db.prepare('SELECT COUNT(*) as c FROM sensor_hubs').get() as any)?.c || 0;
   const listingsCount = (db.prepare("SELECT COUNT(*) as c FROM listings WHERE status = 'available'").get() as any)?.c || 0;
+  const depotsCount = (db.prepare('SELECT COUNT(*) as c FROM depots').get() as any)?.c || 0;
 
   res.json({
     status: 'ok',
     service: 'MundaSense Platform',
     version: '3.0.0',
     database: 'sqlite',
-    users_registered: usersCount,
+    farm_count: farmsCount,
     farms_in_db: farmsCount,
+    district_count: districtCount,
+    provinces_covered: provincesCount,
+    hubs_online: hubsCount,
+    users_registered: usersCount,
     active_listings: listingsCount,
+    depots_total: depotsCount,
     gemini_enabled: geminiStatus().enabled,
     gemini_model: geminiStatus().model,
     disease_reports: (db.prepare('SELECT COUNT(*) as c FROM crop_health_reports').get() as any)?.c || 0,

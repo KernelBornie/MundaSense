@@ -54,7 +54,11 @@ interface HubDetail {
   history: Reading[];
 }
 
-export function SensorsView() {
+interface SensorsViewProps {
+  onOpenSensorModal?: () => void;
+}
+
+export function SensorsView({ onOpenSensorModal }: SensorsViewProps = {}) {
   const { data: hubs, loading, refresh, tick } = usePolling<Hub[]>('/api/sensors/hubs', 5000);
   const [selectedHubId, setSelectedHubId] = useState<number | null>(null);
   const [hubDetail, setHubDetail] = useState<HubDetail | null>(null);

@@ -198,9 +198,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       openOrders: 0,
       transportRequests: 0,
       provinces: {
-        Eastern: farms.filter((f) => f.province === 'Eastern').length,
-        Lusaka: farms.filter((f) => f.province === 'Lusaka').length,
         Central: farms.filter((f) => f.province === 'Central').length,
+        Copperbelt: farms.filter((f) => f.province === 'Copperbelt').length,
+        Eastern: farms.filter((f) => f.province === 'Eastern').length,
+        Luapula: farms.filter((f) => f.province === 'Luapula').length,
+        Lusaka: farms.filter((f) => f.province === 'Lusaka').length,
+        Muchinga: farms.filter((f) => f.province === 'Muchinga').length,
+        Northern: farms.filter((f) => f.province === 'Northern').length,
+        'North-Western': farms.filter((f) => f.province === 'North-Western').length,
+        Southern: farms.filter((f) => f.province === 'Southern').length,
+        Western: farms.filter((f) => f.province === 'Western').length,
       },
     };
   }, [farms]);

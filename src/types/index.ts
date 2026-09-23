@@ -3,8 +3,33 @@ export type Role = 'admin' | 'farmer' | 'seller' | 'customer' | 'transporter';
 export type HealthStatus = 'healthy' | 'watch' | 'alert';
 export type RiskLevel = 'LOW' | 'WATCH' | 'HIGH';
 
-export type Province = 'Eastern' | 'Lusaka' | 'Central';
-export type CropType = 'Maize' | 'Groundnuts' | 'Soybeans' | 'Sunflower' | 'Cotton';
+export type Province =
+  | 'Central'
+  | 'Copperbelt'
+  | 'Eastern'
+  | 'Luapula'
+  | 'Lusaka'
+  | 'Muchinga'
+  | 'Northern'
+  | 'North-Western'
+  | 'Southern'
+  | 'Western';
+
+export type CropType =
+  | 'Maize'
+  | 'Groundnuts'
+  | 'Soybeans'
+  | 'Sunflower'
+  | 'Cotton'
+  | 'Cassava'
+  | 'Sorghum'
+  | 'Millet'
+  | 'Wheat'
+  | 'Rice'
+  | 'Coffee'
+  | 'Beans'
+  | 'Tea'
+  | 'Other';
 
 export interface User {
   id: number;

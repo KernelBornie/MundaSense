@@ -213,7 +213,29 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_disease_phone ON crop_health_reports(phone);
   CREATE INDEX IF NOT EXISTS idx_disease_created ON crop_health_reports(created_at);
+
+  CREATE TABLE IF NOT EXISTS depots (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL,
+    province TEXT NOT NULL,
+    district TEXT NOT NULL,
+    latitude REAL NOT NULL,
+    longitude REAL NOT NULL,
+    capacity_tons REAL NOT NULL,
+    operator TEXT,
+    phone TEXT,
+    email TEXT,
+    crops TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_depots_province ON depots(province);
+  CREATE INDEX IF NOT EXISTS idx_depots_district ON depots(district);
+  CREATE INDEX IF NOT EXISTS idx_depots_type ON depots(type);
 `);
+
+export const getDb = () => db;
 
 // Migration for existing databases
 try {
