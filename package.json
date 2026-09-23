@@ -3,9 +3,9 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "Smart Agriculture Platform for Zambian Smallholders — MongoDB-backed nationwide coverage",
+  "description": "Smart Agriculture Platform for Zambian Smallholders",
   "engines": {
-    "node": "20.x",
+    "node": ">=22.5.0",
     "npm": ">=10.0.0"
   },
   "scripts": {
@@ -23,7 +23,6 @@
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
     "lucide-react": "^0.546.0",
-    "mongodb": "^6.10.0",
     "motion": "^12.23.24",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
@@ -32,7 +31,7 @@
   },
   "devDependencies": {
     "@types/express": "^4.17.21",
-    "@types/node": "^20.16.0",
+    "@types/node": "^22.14.0",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "autoprefixer": "^10.4.21",
