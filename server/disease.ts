@@ -9,7 +9,7 @@ import {
   listDiseaseReports,
   listDiseaseReportsForPhone,
 } from './db.ts';
-import { getTreatmentPlan, estimateTreatmentCost, DiseaseTreatmentPlan } from './treatmentDatabase.ts';
+import { getTreatmentPlan, estimateTreatmentCost, type DiseaseTreatmentPlan } from './treatmentDatabase.ts';
 
 const GEMINI_MODEL = 'gemini-2.5-flash';
 

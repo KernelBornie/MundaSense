@@ -15,10 +15,11 @@ import {
   getMarketPrices,
   listDiseaseReportsForPhone,
   db,
+  connectMongo,
+  seedIfEmpty,
 } from './server/db.ts';
 import { handleUssd } from './server/ussd.ts';
 import { sendSms, sendBulkSms, getAccountBalance } from './server/sms.ts';
-import { seedDatabase } from './server/seed.ts';
 import { depotsRouter, seedDepotsIfEmpty } from './server/depots.ts';
 import { farmsRouter } from './server/farms.ts';
 import {
@@ -43,23 +44,26 @@ const __dirname = path.dirname(__filename);
 const DIST_PATH = path.join(__dirname, 'dist');
 
 /* ============================================================
-   BOOT: seed DB + depots if empty
+   BOOT: Hybrid MongoDB Atlas + in-memory cache initialization
    ============================================================ */
-try {
-  seedDatabase();
-  seedDepotsIfEmpty();
+const bootPromise = (async () => {
+  try {
+    await connectMongo();
+    await seedIfEmpty();
+    seedDepotsIfEmpty(); // uses the shim
 
-  const lukuluBootCount =
-    (db.prepare("SELECT COUNT(*) as c FROM depots WHERE district = 'Lukulu'").get() as any)?.c || 0;
-  console.log(`[boot] Lukulu depots: ${lukuluBootCount}`);
+    const lukuluBootCount =
+      (db.prepare("SELECT COUNT(*) as c FROM depots WHERE district = 'Lukulu'").get() as any)?.c || 0;
+    console.log(`[boot] Lukulu depots: ${lukuluBootCount}`);
 
-  if (lukuluBootCount === 0) {
-    console.warn('[boot] ⚠️  Lukulu depots missing. Forcing reseed...');
-    seedDepotsIfEmpty();
+    if (lukuluBootCount === 0) {
+      console.warn('[boot] ⚠️  Lukulu depots missing. Forcing reseed...');
+      seedDepotsIfEmpty();
+    }
+  } catch (e: any) {
+    console.error('[boot] Seed error (continuing):', e.message);
   }
-} catch (e: any) {
-  console.error('[boot] Seed error (continuing):', e.message);
-}
+})();
 
 const app = express();
 
@@ -688,7 +692,10 @@ async function startServer() {
     });
   }
 
-  const PORT = Number(process.env.PORT) || 3000;
+  // Ensure boot sequence (connectMongo, seedIfEmpty, seedDepotsIfEmpty) completes before listening
+  await bootPromise;
+
+  const PORT = 3000;
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`🌾 MundaSense v3 running on http://0.0.0.0:${PORT}`);
