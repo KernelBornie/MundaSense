@@ -5,26 +5,20 @@ services:
     region: frankfurt
     plan: free
     branch: main
-    buildCommand: npm ci --include=dev && npm run build
+    buildCommand: npm install --include=dev && npm run build
     startCommand: npm start
     healthCheckPath: /api/health
     autoDeploy: true
     envVars:
       - key: NODE_ENV
         value: production
-      - key: PORT
-        value: 3000
-      - key: MONGODB_URI
-        sync: false
-      - key: MONGODB_DB_NAME
-        value: mundasense
       - key: AT_USERNAME
-        sync: false
-      - key: AT_API_KEY
-        sync: false
+        value: sandbox
       - key: AT_SENDER_ID
         value: MUNDASENSE
-      - key: AT_BASE_URL
+      - key: AT_API_KEY
         sync: false
+      - key: AT_BASE_URL
+        value: https://api.sandbox.africastalking.com/version1
       - key: GEMINI_API_KEY
         sync: false
