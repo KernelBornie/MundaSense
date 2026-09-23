@@ -4,8 +4,9 @@ node_modules/
 # Build output
 dist/
 build/
+.vite/
 
-# Environment files (NEVER commit these!)
+# Environment
 .env
 .env.local
 .env.*.local
@@ -14,7 +15,7 @@ build/
 *.log
 npm-debug.log*
 
-# OS files
+# OS
 .DS_Store
 Thumbs.db
 
@@ -23,13 +24,15 @@ Thumbs.db
 .idea/
 *.swp
 
-# SQLite DB (if using local backend)
+# Database (legacy SQLite — should not be present anymore)
 *.db
 *.db-wal
 *.db-shm
+data/
 
-# Uploads
-uploads/
+# Render
+render.yaml.bak
 
-# Vite cache
-.vite/
+# Bun (if any leftovers)
+bun.lock
+bun.lockb
