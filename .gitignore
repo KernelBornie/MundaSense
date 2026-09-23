@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+
+# Environment files (NEVER commit these!)
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# SQLite DB (if using local backend)
+*.db
+*.db-wal
+*.db-shm
+
+# Uploads
+uploads/
+
+# Vite cache
+.vite/
