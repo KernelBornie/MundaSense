@@ -1,24 +1,16 @@
 /**
- * Real USSD handler — Africa's Talking compatible.
- *
- * Africa's Talking POSTs to our webhook with:
- *   sessionId, serviceCode, phoneNumber, text
- *
- * We reply with plain text:
- *   "CON ..." to continue
- *   "END ..." to terminate
- *
- * The SAME handler runs whether the request comes from:
- *   - Africa's Talking in production (telco SMS gateway)
- *   - Our test endpoint /api/ussd/simulate (for judges, offline)
+ * MundaSense — Full USSD Gateway
+ * Africa's Talking compatible. Feature-phone farmers can:
+ *  - Register (creates user in SQLite)
+ *  - Login with PIN (verifies against DB)
+ *  - Access all services: advisories, market, sell, transport, soil
+ * Every write hits the real SQLite database.
  */
 import type { Request, Response } from 'express';
 import {
   findUserByPhone,
   createUser,
-  saveUssdSession,
-  getUssdSession,
-  deleteUssdSession,
+  verifyPin,
   getMarketPrices,
   getMarketPrice,
   createListing,
@@ -26,16 +18,16 @@ import {
 } from './db.ts';
 import { sendSms } from './sms.ts';
 
-/* ============================================================
-   MENUS
-   ============================================================ */
-const LANGUAGES = ['English','Bemba','Nyanja','Tonga','Lozi','Lunda','Luvale','Kaonde'];
-const PROVINCES = ['Eastern','Lusaka','Central','Southern','Northern','Copperbelt','Western','Muchinga','North-Western','Luapula'];
-const ROLES = ['farmer','seller','customer','transporter'];
+const LANGUAGES = ['English', 'Bemba', 'Nyanja', 'Tonga', 'Lozi', 'Lunda', 'Luvale', 'Kaonde'];
+const PROVINCES = [
+  'Eastern', 'Lusaka', 'Central', 'Southern', 'Northern',
+  'Copperbelt', 'Western', 'Muchinga', 'North-Western', 'Luapula',
+];
+const ROLES = ['farmer', 'seller', 'customer', 'transporter'];
+const CROPS = ['Maize', 'Groundnuts', 'Soybeans', 'Sunflower', 'Cotton'];
 
-/* Localized welcome strings */
-const WELCOME: Record<string, (name: string) => string> = {
-  English: (n) => `Welcome, ${n}!`,
+const WELCOME: Record<string, (n: string) => string> = {
+  English: (n) => `Welcome back, ${n}!`,
   Bemba: (n) => `Mwaiseni, ${n}!`,
   Nyanja: (n) => `Takulandirani, ${n}!`,
   Tonga: (n) => `Mwabonwa, ${n}!`,
@@ -45,323 +37,207 @@ const WELCOME: Record<string, (name: string) => string> = {
   Kaonde: (n) => `Mwabuka, ${n}!`,
 };
 
+const AUTH_MENU = (name: string) =>
+  `CON MundaSense · ${name}\n` +
+  `1. Crop Advisory\n` +
+  `2. Disease Alert\n` +
+  `3. Storage Check\n` +
+  `4. Market Prices\n` +
+  `5. Sell My Crop\n` +
+  `6. Hire Transport\n` +
+  `7. Check Soil Moisture\n` +
+  `8. My Account`;
+
+const PUBLIC_MENU =
+  `CON MundaSense (*384*2873#)\n` +
+  `Mwapoleni / Moni / Hello\n\n` +
+  `1. Register new account\n` +
+  `2. Login with PIN\n` +
+  `3. Check market prices\n` +
+  `4. Request officer callback`;
+
 /* ============================================================
    MAIN HANDLER
+   Path is encoded in the `text` param.
+   Example: "1234*5*1*1000*1*1"
+     = PIN 1234, chose Sell, Maize, 1000kg, accept price, confirm
    ============================================================ */
 export async function handleUssd(req: Request, res: Response) {
-  const sessionId = String(req.body.sessionId || req.body.session_id || `sim-${Date.now()}`);
-  const phone = String(req.body.phoneNumber || req.body.phone || '');
-  const serviceCode = String(req.body.serviceCode || req.body.service_code || '*2873#');
+  const phone = String(req.body.phoneNumber || req.body.phone || '').trim();
   const text = String(req.body.text || '').trim();
 
   res.set('Content-Type', 'text/plain');
 
   if (!phone) {
-    return res.send('END Missing phone number. Please dial *2873# again.');
+    return res.send('END Missing phone number. Dial *384*2873# again.');
   }
 
-  // Accumulated path segments — Africa's Talking sends the FULL path every request
   const parts = text.split('*').filter(Boolean);
-
   const existingUser = findUserByPhone(phone);
 
   /* ============================================================
-     LEVEL 0 — Main menu
+     LEVEL 0 — no input yet
      ============================================================ */
   if (parts.length === 0) {
     if (existingUser) {
       return res.send(
-        `CON MundaSense · ${existingUser.full_name}\n` +
-        `1. Crop Advisory\n` +
-        `2. Disease Alert\n` +
-        `3. Storage Check\n` +
-        `4. Market Prices\n` +
-        `5. Officer Callback\n` +
-        `6. Sell My Crop\n` +
-        `7. Hire Transport\n` +
-        `8. Check Soil Moisture\n` +
-        `9. My Account`
+        `CON Welcome back to MundaSense\n` +
+        `Phone: ${phone}\n\n` +
+        `Enter your 4-digit PIN to login:`
       );
     }
-    return res.send(
-      `CON MundaSense (*2873#)\n` +
-      `Mwapoleni / Moni / Hello\n\n` +
-      `1. Register new account\n` +
-      `2. Check market prices\n` +
-      `3. Request officer callback`
-    );
+    return res.send(PUBLIC_MENU);
   }
 
   const root = parts[0];
 
   /* ============================================================
-     REGISTRATION FLOW — 6 steps
-     Path: 1 → 1*<lang> → 1*<lang>*<name>
-           → 1*<lang>*<name>*<province>
-           → 1*<lang>*<name>*<province>*<village>
-           → 1*<lang>*<name>*<province>*<village>*<role>
-     ============================================================ */
-  if (root === '1' && !existingUser) {
-    // STEP 1 — language
-    if (parts.length === 1) {
-      return res.send(
-        `CON Welcome! / Mwapoleni!\nChoose your language:\n` +
-        `1. English\n` +
-        `2. Bemba (Icibemba)\n` +
-        `3. Nyanja (Cinyanja)\n` +
-        `4. Tonga (Chitonga)\n` +
-        `5. Lozi (Silozi)\n` +
-        `6. Lunda\n` +
-        `7. Luvale\n` +
-        `8. Kaonde (Kikaonde)`
-      );
-    }
-
-    // STEP 2 — store language, ask for name
-    if (parts.length === 2) {
-      const langIdx = parseInt(parts[1], 10);
-      const language = LANGUAGES[langIdx - 1] || 'English';
-      saveUssdSession(sessionId, phone, serviceCode, 'reg_name', { language });
-      return res.send(`CON Enter your FULL NAME\n(as written on your ZIAMIS card):`);
-    }
-
-    // STEP 3 — store name, ask for province
-    if (parts.length === 3) {
-      const sess = getUssdSession(sessionId);
-      const data = sess?.data || {};
-      data.full_name = parts[2].slice(0, 60);
-      saveUssdSession(sessionId, phone, serviceCode, 'reg_province', data);
-      return res.send(
-        `CON Choose your province:\n` +
-        `1. Eastern (Chipata)\n` +
-        `2. Lusaka\n` +
-        `3. Central (Mkushi)\n` +
-        `4. Southern\n` +
-        `5. Northern\n` +
-        `6. Copperbelt\n` +
-        `7. Western\n` +
-        `8. Muchinga\n` +
-        `9. North-Western\n` +
-        `0. Luapula`
-      );
-    }
-
-    // STEP 4 — store province, ask for village
-    if (parts.length === 4) {
-      const sess = getUssdSession(sessionId);
-      const data = sess?.data || {};
-      const idx = parseInt(parts[3], 10);
-      data.province = idx === 0 ? 'Luapula' : (PROVINCES[idx - 1] || 'Eastern');
-      saveUssdSession(sessionId, phone, serviceCode, 'reg_village', data);
-      return res.send(`CON Enter your village or ward name:`);
-    }
-
-    // STEP 5 — store village, ask for role
-    if (parts.length === 5) {
-      const sess = getUssdSession(sessionId);
-      const data = sess?.data || {};
-      data.village = parts[4].slice(0, 60);
-      saveUssdSession(sessionId, phone, serviceCode, 'reg_role', data);
-      return res.send(
-        `CON Choose your role:\n` +
-        `1. Farmer\n` +
-        `2. Seller / Cooperative\n` +
-        `3. Buyer / Miller\n` +
-        `4. Transporter`
-      );
-    }
-
-    // STEP 6 — store role, create account, send PIN via SMS
-    if (parts.length === 6) {
-      const sess = getUssdSession(sessionId);
-      const data = sess?.data || {};
-      const langIdx = parseInt(parts[1], 10);
-      const provIdx = parseInt(parts[3], 10);
-      const roleIdx = parseInt(parts[5], 10);
-
-      const fullName = data.full_name || parts[2] || 'Unnamed Farmer';
-      const role = ROLES[roleIdx - 1] || 'farmer';
-      const province = data.province || (provIdx === 0 ? 'Luapula' : (PROVINCES[provIdx - 1] || 'Eastern'));
-      const village = data.village || parts[4] || 'Msekera';
-      const language = data.language || LANGUAGES[langIdx - 1] || 'English';
-
-      // Generate secure 4-digit PIN
-      const pin = String(Math.floor(1000 + Math.random() * 9000));
-
-      // Create user in DATABASE
-      const newUser = createUser({
-        phone,
-        full_name: fullName,
-        role,
-        village,
-        district: village,
-        province,
-        language,
-        pin,
-      });
-
-      deleteUssdSession(sessionId);
-
-      // Real SMS dispatch — farmer receives PIN
-      const smsMessage = `MundaSense: Welcome ${newUser.full_name}! Your login PIN is ${pin}. Use it to login at mundasense.onrender.com. Keep this PIN safe.`;
-      await sendSms(phone, smsMessage);
-
-      const welcomeFn = WELCOME[language] || WELCOME.English;
-      return res.send(
-        `END ${welcomeFn(newUser.full_name)}\n` +
-        `Account created.\n\n` +
-        `Your PIN is: ${pin}\n\n` +
-        `It was also sent to you by SMS.\n` +
-        `Use it to login on the app.\n\n` +
-        `Dial *2873# again to access:\n` +
-        `· Crop advisories\n` +
-        `· Market prices\n` +
-        `· Sell your harvest\n` +
-        `· Hire transport\n\n` +
-        `Zikomo!`
-      );
-    }
-
-    return res.send('END Session error. Dial *2873# to restart.');
-  }
-
-  /* ============================================================
-     EXISTING USER SERVICES (LOGGED IN)
+     EXISTING USER — PIN login then full authenticated menu
      ============================================================ */
   if (existingUser) {
-    const lang = existingUser.language || 'English';
-
-    // ---- 1. Crop Advisory ----
-    if (root === '1') {
-      if (parts.length === 1) {
-        return res.send(
-          `CON Choose your crop:\n` +
-          `1. Maize\n` +
-          `2. Groundnuts\n` +
-          `3. Soybeans\n` +
-          `4. Sunflower\n` +
-          `5. Cotton`
-        );
-      }
-      const crops = ['Maize','Groundnuts','Soybeans','Sunflower','Cotton'];
-      const crop = crops[parseInt(parts[1], 10) - 1] || 'Maize';
-
-      // Query REAL farm data from DB
-      const farm: any = db.prepare(
-        'SELECT * FROM farms WHERE farmer_phone = ? LIMIT 1'
-      ).get(phone);
-
-      const soil = farm?.soil_moisture || 28.8;
-      const advice = soil < 22
-        ? 'LOW — irrigate within 2 days.'
-        : soil < 32
-        ? 'WATCH — monitor closely. Rain possible Thursday.'
-        : 'ADEQUATE — no irrigation needed today.';
-
-      return res.send(`END ${crop} · ${farm?.village || existingUser.village}\nSoil moisture @30cm: ${soil}%\n${advice}`);
+    if (root.toUpperCase() === 'LOGOUT') {
+      return res.send('END Logged out. Dial *384*2873# again. Zikomo!');
     }
 
-    // ---- 2. Disease Alert ----
-    if (root === '2') {
-      const farm: any = db.prepare('SELECT * FROM farms WHERE farmer_phone = ? LIMIT 1').get(phone);
+    const pinAttempt = parts[0];
+    const looksLikePin = /^\d{4}$/.test(pinAttempt);
+    const pinValid = looksLikePin && verifyPin(pinAttempt, existingUser.pin_hash);
+
+    if (!pinValid) {
+      if (parts.length === 1) {
+        return res.send(
+          `END Invalid PIN.\n\n` +
+          `Dial *384*2873# again to retry.`
+        );
+      }
+      return res.send(`END Session invalid. Dial *384*2873# and enter PIN first.`);
+    }
+
+    // ✅ Authenticated — parts[0] = PIN, parts[1+] = menu navigation
+    const menuPath = parts.slice(1);
+
+    if (menuPath.length === 0) {
+      return res.send(AUTH_MENU(existingUser.full_name.split(' ')[0]));
+    }
+
+    const choice = menuPath[0];
+
+    /* ---------- 1. Crop Advisory ---------- */
+    if (choice === '1') {
+      if (menuPath.length === 1) {
+        return res.send(
+          `CON Choose your crop:\n` +
+          CROPS.map((c, i) => `${i + 1}. ${c}`).join('\n')
+        );
+      }
+      const crop = CROPS[parseInt(menuPath[1], 10) - 1] || 'Maize';
+      const farm: any = db
+        .prepare('SELECT * FROM farms WHERE farmer_phone = ? LIMIT 1')
+        .get(phone);
+      const soil = farm?.soil_moisture ?? 28.8;
+      const advice =
+        soil < 22
+          ? 'LOW — irrigate within 2 days.'
+          : soil < 32
+          ? 'WATCH — monitor closely.'
+          : 'ADEQUATE — no irrigation today.';
+      return res.send(
+        `END ${crop} · ${farm?.village || existingUser.village || 'Unknown'}\n` +
+        `Soil @30cm: ${Number(soil).toFixed(1)}%\n${advice}\n\nZikomo!`
+      );
+    }
+
+    /* ---------- 2. Disease Alert ---------- */
+    if (choice === '2') {
+      const farm: any = db
+        .prepare('SELECT * FROM farms WHERE farmer_phone = ? LIMIT 1')
+        .get(phone);
       const risk = farm?.disease_risk || 'WATCH';
       return res.send(
         `END Disease Risk: ${risk}\n` +
-        `${farm?.village || existingUser.village}: High humidity\n` +
-        `Inspect maize leaves for Northern Leaf Blight.\n` +
-        `Reply CALL to SMS 3030 for officer.`
+        `${farm?.village || existingUser.village}: High humidity.\n` +
+        `Inspect maize leaves for Northern Leaf Blight.\n\n` +
+        `Reply CALL to 12345 for officer.`
       );
     }
 
-    // ---- 3. Storage Check ----
-    if (root === '3') {
-      const silo: any = db.prepare(
-        "SELECT * FROM advisories WHERE category = 'Storage' ORDER BY created_at DESC LIMIT 1"
-      ).get();
+    /* ---------- 3. Storage Check ---------- */
+    if (choice === '3') {
       return res.send(
-        `END Storage Status:\n` +
-        `Grain moisture: 14.3% (CRITICAL)\n` +
-        `Dry bags below 13% to prevent aflatoxin.\n` +
-        `${silo?.message || ''}`
+        `END Storage status:\n` +
+        `Msekera Silo A: 14.3% (CRITICAL)\n\n` +
+        `Dry bags below 13% to prevent aflatoxin.`
       );
     }
 
-    // ---- 4. Market Prices (REAL query) ----
-    if (root === '4') {
+    /* ---------- 4. Market Prices (real DB query) ---------- */
+    if (choice === '4') {
       const prices = getMarketPrices();
-      if (prices.length === 0) {
-        return res.send('END No market listings today. Check again tomorrow.');
-      }
-      const lines = prices.slice(0, 6).map(p => `${p.crop}: ZMW ${p.price}/kg`).join('\n');
+      if (!prices.length) return res.send('END No listings today.');
+      const lines = prices
+        .slice(0, 6)
+        .map((p) => `${p.crop}: ZMW ${p.price}/kg`)
+        .join('\n');
       return res.send(`END Market Prices (ZMW/kg):\n${lines}\n\nBulk sale Friday @ Msekera.`);
     }
 
-    // ---- 5. Officer Callback ----
-    if (root === '5') {
-      const ref = Math.floor(Math.random() * 9000) + 1000;
-      // Log callback request to advisories table
-      db.prepare(
-        "INSERT INTO advisories (farm_phone, channel, category, message, language) VALUES (?, 'USSD', 'Callback', ?, ?)"
-      ).run(phone, `Callback requested — Ref CB-${ref}`, lang);
-      // SMS confirmation
-      await sendSms(phone, `MundaSense: Callback confirmed. Ref CB-${ref}. Officer will call within 24h.`);
-      return res.send(`END Callback requested.\nRef: CB-${ref}\nOfficer will call within 24h.\nSMS confirmation sent.`);
-    }
-
-    // ---- 6. Sell My Crop ----
-    if (root === '6') {
-      if (parts.length === 1) {
+    /* ---------- 5. Sell My Crop ---------- */
+    if (choice === '5') {
+      if (menuPath.length === 1) {
         return res.send(
-          `CON Sell my crop:\n` +
-          `1. Maize\n` +
-          `2. Groundnuts\n` +
-          `3. Soybeans\n` +
-          `4. Sunflower`
+          `CON Which crop to sell?\n` +
+          CROPS.slice(0, 4).map((c, i) => `${i + 1}. ${c}`).join('\n')
         );
       }
-      const crops = ['Maize','Groundnuts','Soybeans','Sunflower'];
-      const crop = crops[parseInt(parts[1], 10) - 1] || 'Maize';
+      const crop = CROPS[parseInt(menuPath[1], 10) - 1] || 'Maize';
 
-      if (parts.length === 2) {
-        return res.send(`CON ${crop} — Enter quantity in kg\n(e.g. 1000)`);
+      if (menuPath.length === 2) {
+        return res.send(`CON ${crop} — Enter quantity in kg:\n(e.g. 1000)`);
       }
 
-      const qty = parseInt(parts[2], 10);
-      if (!qty || qty <= 0) return res.send('END Invalid quantity. Dial *2873# to restart.');
+      const qty = parseInt(menuPath[2], 10);
+      if (!qty || qty <= 0) {
+        return res.send('END Invalid quantity. Restart with *384*2873#.');
+      }
 
-      if (parts.length === 3) {
-        const avg = getMarketPrice(crop) || 6.20;
+      if (menuPath.length === 3) {
+        const avg = getMarketPrice(crop) || 6.2;
         return res.send(
-          `CON ${crop} · ${qty} kg\nToday's market avg: ZMW ${avg}/kg\n\n1. Accept ZMW ${avg}\n2. Enter my own price`
+          `CON ${crop} · ${qty} kg\nToday's avg: ZMW ${avg}/kg\n\n` +
+          `1. Accept ZMW ${avg}\n` +
+          `2. Enter my own price`
         );
       }
 
       let price: number;
-      if (parts[3] === '1') {
-        price = getMarketPrice(crop) || 6.20;
-        if (parts.length === 4) {
-          const total = (qty * price).toFixed(0);
+
+      if (menuPath[3] === '1') {
+        price = getMarketPrice(crop) || 6.2;
+        if (menuPath.length === 4) {
           return res.send(
-            `CON Confirm listing:\n${crop} · ${qty} kg\nZMW ${price}/kg\nTotal: ZMW ${total}\n\n1. Publish\n2. Cancel`
+            `CON Confirm:\n${crop} · ${qty} kg\nZMW ${price}/kg\n` +
+            `Total: ZMW ${(qty * price).toFixed(0)}\n\n` +
+            `1. Publish\n2. Cancel`
           );
         }
-        if (parts[4] === '2') return res.send('END Listing cancelled.');
-      } else if (parts[3] === '2') {
-        if (parts.length === 4) return res.send(`CON Enter your price (ZMW/kg):`);
-        price = parseFloat(parts[4]);
+        if (menuPath[4] === '2') return res.send('END Listing cancelled.');
+      } else if (menuPath[3] === '2') {
+        if (menuPath.length === 4) return res.send(`CON Enter your price (ZMW/kg):`);
+        price = parseFloat(menuPath[4]);
         if (!price || price <= 0) return res.send('END Invalid price.');
-        if (parts.length === 5) {
-          const total = (qty * price).toFixed(0);
+        if (menuPath.length === 5) {
           return res.send(
-            `CON Confirm listing:\n${crop} · ${qty} kg\nZMW ${price}/kg\nTotal: ZMW ${total}\n\n1. Publish\n2. Cancel`
+            `CON Confirm:\n${crop} · ${qty} kg\nZMW ${price}/kg\n` +
+            `Total: ZMW ${(qty * price).toFixed(0)}\n\n` +
+            `1. Publish\n2. Cancel`
           );
         }
-        if (parts[5] === '2') return res.send('END Listing cancelled.');
+        if (menuPath[5] === '2') return res.send('END Listing cancelled.');
       } else {
         return res.send('END Invalid choice.');
       }
 
-      // PUBLISH — write to REAL database
+      // WRITE TO DATABASE
       const listing: any = createListing({
         seller_phone: phone,
         crop,
@@ -369,52 +245,111 @@ export async function handleUssd(req: Request, res: Response) {
         price_per_kg_zmw: price,
         village: existingUser.village,
         province: existingUser.province,
-        description: `Listed via USSD *2873#`,
+        description: 'Listed via USSD',
       });
 
-      // SMS confirmation
       await sendSms(
         phone,
-        `MundaSense: Listing LIVE — ${crop} ${qty}kg @ ZMW ${price}/kg. ID: MS-L-${listing.id}. You will get SMS when a buyer orders.`
+        `MundaSense: Listing LIVE — ${crop} ${qty}kg @ ZMW ${price}/kg. ID: MS-L-${listing.id}.`
       );
 
       return res.send(
         `END Listing PUBLISHED!\n` +
         `ID: MS-L-${listing.id}\n` +
         `${crop} · ${qty} kg @ ZMW ${price}/kg\n\n` +
-        `Buyers can now see it.\n` +
-        `SMS confirmation sent.`
+        `SMS sent. Buyers will contact you.`
       );
     }
 
-    // ---- 7. Hire Transport ----
-    if (root === '7') {
-      return res.send(
-        `END To request transport, reply to SMS 3030 with:\n` +
-        `MOVE <pickup> <dropoff> <bags>\n\n` +
-        `Example:\n` +
-        `MOVE MSEKERA LUSAKA 20`
-      );
-    }
-
-    // ---- 8. Check Soil Moisture (REAL DB query) ----
-    if (root === '8') {
-      const farm: any = db.prepare('SELECT * FROM farms WHERE farmer_phone = ? LIMIT 1').get(phone);
-      if (!farm) {
-        return res.send('END No farm registered to this phone yet. Contact cooperative.');
+    /* ---------- 6. Hire Transport ---------- */
+    if (choice === '6') {
+      if (menuPath.length === 1) {
+        return res.send(
+          `CON Transport:\n` +
+          `1. Request a truck\n` +
+          `2. Track my delivery`
+        );
       }
+
+      if (menuPath[1] === '1') {
+        if (menuPath.length === 2) {
+          return res.send(`CON Enter pickup location:\n(e.g. Msekera)`);
+        }
+        if (menuPath.length === 3) {
+          return res.send(`CON Enter dropoff location:\n(e.g. Lusaka)`);
+        }
+        if (menuPath.length === 4) {
+          return res.send(`CON Enter cargo weight in kg:\n(e.g. 1000)`);
+        }
+
+        const pickup = menuPath[2];
+        const dropoff = menuPath[3];
+        const weight = parseInt(menuPath[4], 10) || 0;
+
+        const info = db
+          .prepare(
+            `INSERT INTO transport_requests
+             (requester_phone, pickup_location, dropoff_location, cargo_description, weight_kg, contact_name, contact_phone)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`
+          )
+          .run(
+            phone,
+            pickup,
+            dropoff,
+            `${weight}kg`,
+            weight,
+            existingUser.full_name,
+            phone
+          );
+
+        await sendSms(
+          phone,
+          `MundaSense: TR-${info.lastInsertRowid} posted. Transporters will bid shortly.`
+        );
+
+        return res.send(
+          `END Transport request posted!\n` +
+          `Ref: TR-${info.lastInsertRowid}\n` +
+          `${pickup} → ${dropoff}\n` +
+          `${weight} kg\n\n` +
+          `SMS confirmation sent.`
+        );
+      }
+
+      if (menuPath[1] === '2') {
+        const r: any = db
+          .prepare(
+            'SELECT * FROM transport_requests WHERE requester_phone = ? ORDER BY id DESC LIMIT 1'
+          )
+          .get(phone);
+        if (!r) return res.send('END No active transport requests.');
+        return res.send(
+          `END Latest TR-${r.id}\n` +
+          `Status: ${r.status}\n` +
+          `${r.pickup_location} → ${r.dropoff_location}\n` +
+          `${r.weight_kg} kg`
+        );
+      }
+    }
+
+    /* ---------- 7. Soil Moisture ---------- */
+    if (choice === '7') {
+      const farm: any = db
+        .prepare('SELECT * FROM farms WHERE farmer_phone = ? LIMIT 1')
+        .get(phone);
+      if (!farm) return res.send('END No farm registered. Contact cooperative.');
       return res.send(
         `END Live Soil Moisture:\n` +
         `15cm: ${(farm.soil_moisture * 0.85).toFixed(1)}%\n` +
-        `30cm: ${farm.soil_moisture}%\n` +
+        `30cm: ${Number(farm.soil_moisture).toFixed(1)}%\n` +
         `60cm: ${(farm.soil_moisture * 1.15).toFixed(1)}%\n` +
         `Crop: ${farm.crop}\n` +
-        `Status: ${farm.health_status}`
+        `Health: ${farm.health_status}`
       );
     }
 
-    // ---- 9. My Account ----
-    if (root === '9') {
+    /* ---------- 8. My Account ---------- */
+    if (choice === '8') {
       return res.send(
         `END Your Account:\n` +
         `Name: ${existingUser.full_name}\n` +
@@ -426,23 +361,124 @@ export async function handleUssd(req: Request, res: Response) {
         `ZIAMIS: ${existingUser.ziamis_id || '—'}`
       );
     }
+
+    return res.send(`END Invalid choice. Dial *384*2873# to continue.`);
   }
 
   /* ============================================================
-     NON-REGISTERED USER — public services
+     NEW USER — public services + registration
      ============================================================ */
-  if (root === '2') {
+
+  /* ---------- 1. Registration flow ---------- */
+  if (root === '1') {
+    if (parts.length === 1) {
+      return res.send(
+        `CON Welcome! Choose language:\n` +
+        LANGUAGES.map((l, i) => `${i + 1}. ${l}`).join('\n')
+      );
+    }
+    if (parts.length === 2) {
+      return res.send(`CON Enter your FULL NAME\n(as on ZIAMIS card):`);
+    }
+    if (parts.length === 3) {
+      return res.send(
+        `CON Choose province:\n` +
+        `1. Eastern\n` +
+        `2. Lusaka\n` +
+        `3. Central\n` +
+        `4. Southern\n` +
+        `5. Northern\n` +
+        `6. Copperbelt\n` +
+        `7. Western\n` +
+        `8. Muchinga\n` +
+        `9. North-Western\n` +
+        `0. Luapula`
+      );
+    }
+    if (parts.length === 4) {
+      return res.send(`CON Enter your village or ward name:`);
+    }
+    if (parts.length === 5) {
+      return res.send(
+        `CON Choose your role:\n` +
+        `1. Farmer\n` +
+        `2. Seller / Cooperative\n` +
+        `3. Buyer / Miller\n` +
+        `4. Transporter`
+      );
+    }
+    if (parts.length === 6) {
+      const language = LANGUAGES[parseInt(parts[1], 10) - 1] || 'English';
+      const full_name = parts[2].slice(0, 60);
+      const provinceIdx = parseInt(parts[3], 10);
+      const province =
+        provinceIdx === 0 ? 'Luapula' : PROVINCES[provinceIdx - 1] || 'Eastern';
+      const village = parts[4].slice(0, 60);
+      const role = ROLES[parseInt(parts[5], 10) - 1] || 'farmer';
+
+      const pin = String(Math.floor(1000 + Math.random() * 9000));
+
+      const newUser = createUser({
+        phone,
+        full_name,
+        role,
+        village,
+        district: village,
+        province,
+        language,
+        pin,
+      });
+
+      await sendSms(
+        phone,
+        `MundaSense: Welcome ${newUser.full_name}! Your login PIN is ${pin}. Dial *384*2873# again and enter your PIN to access services.`
+      );
+
+      const welcomeFn = WELCOME[language] || WELCOME.English;
+      return res.send(
+        `END ${welcomeFn(newUser.full_name)}\n` +
+        `Account created.\n\n` +
+        `Your PIN is: ${pin}\n` +
+        `It was also sent by SMS.\n\n` +
+        `Dial *384*2873# again, enter PIN to:\n` +
+        `· Sell your harvest\n` +
+        `· Hire transport\n` +
+        `· Check market prices`
+      );
+    }
+  }
+
+  /* ---------- 3. Public: market prices ---------- */
+  if (root === '3') {
     const prices = getMarketPrices();
-    if (prices.length === 0) return res.send('END No listings available.');
-    const lines = prices.slice(0, 5).map(p => `${p.crop}: ZMW ${p.price}/kg`).join('\n');
+    if (!prices.length) return res.send('END No listings today.');
+    const lines = prices
+      .slice(0, 5)
+      .map((p) => `${p.crop}: ZMW ${p.price}/kg`)
+      .join('\n');
     return res.send(`END Market Prices (ZMW/kg):\n${lines}`);
   }
 
-  if (root === '3') {
+  /* ---------- 4. Public: officer callback ---------- */
+  if (root === '4') {
     const ref = Math.floor(Math.random() * 9000) + 1000;
-    await sendSms(phone, `MundaSense: Callback ref CB-${ref}. Officer will call within 24h.`);
+    db.prepare(
+      "INSERT INTO advisories (farm_phone, channel, category, message) VALUES (?, 'USSD', 'Callback', ?)"
+    ).run(phone, `Callback ref CB-${ref}`);
+    await sendSms(
+      phone,
+      `MundaSense: Callback confirmed. Ref CB-${ref}. Officer will call within 24h.`
+    );
     return res.send(`END Callback requested. Ref: CB-${ref}. Officer will call you soon.`);
   }
 
-  return res.send('END Invalid choice. Dial *2873# to restart.');
+  /* ---------- 2. Public: PIN login prompt for unregistered phone ---------- */
+  if (root === '2') {
+    return res.send(
+      `END This phone is not registered.\n\n` +
+      `Dial *384*2873# and choose option 1 to register.`
+    );
+  }
+
+  return res.send(`END Invalid choice. Dial *384*2873# to restart.`);
 }
