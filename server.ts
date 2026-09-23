@@ -695,7 +695,7 @@ async function startServer() {
   // Ensure boot sequence (connectMongo, seedIfEmpty, seedDepotsIfEmpty) completes before listening
   await bootPromise;
 
-  const PORT = 3000;
+  const PORT = Number(process.env.RENDER ? process.env.PORT : (process.env.PORT && process.env.PORT !== '8080' ? process.env.PORT : 3000));
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`🌾 MundaSense v3 running on http://0.0.0.0:${PORT}`);

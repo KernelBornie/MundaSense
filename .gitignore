@@ -75,8 +75,10 @@ desktop.ini
 *.db-shm
 *.sqlite
 *.sqlite3
-data/
-data/*.db
+/data/
+/data/*.db
+!src/data/
+!src/data/**
 
 # ============================================================
 # Temporary / cache
