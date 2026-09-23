@@ -3,7 +3,6 @@ import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
 import path from 'path';
 import crypto from 'crypto';
-import { GoogleGenAI } from '@google/genai';
 
 import {
   findUserByPhone,
@@ -12,11 +11,23 @@ import {
   verifyPin,
   listActiveListings,
   getMarketPrices,
+  listDiseaseReportsForPhone,
   db,
 } from './server/db.ts';
 import { handleUssd } from './server/ussd.ts';
-import { sendSms } from './server/sms.ts';
+import { sendSms, sendBulkSms, getAccountBalance } from './server/sms.ts';
 import { seedDatabase } from './server/seed.ts';
+import {
+  analyzeLeafImage,
+  getRecentReports,
+  getCropList,
+  geminiStatus,
+} from './server/disease.ts';
+import { marketplaceRouter } from './server/marketplace.ts';
+import { advisoriesRouter } from './server/advisories.ts';
+import { sensorsRouter } from './server/sensors.ts';
+import { storageRouter } from './server/storage.ts';
+import { transportRouter } from './server/transport.ts';
 
 dotenv.config();
 
@@ -126,81 +137,229 @@ app.post('/api/auth/logout', requireAuth, (req: Request, res: Response) => {
 });
 
 /* ============================================================
-   USSD — Real Africa's Talking webhook + test endpoints
+   USSD — Real Africa's Talking webhook + test endpoint
    ============================================================ */
 app.post('/ussd', handleUssd);
 app.post('/api/ussd', handleUssd);
 app.post('/api/ussd/simulate', handleUssd);
 
 app.get('/api/ussd/sessions', (_req: Request, res: Response) => {
-  const rows = db
-    .prepare(
-      'SELECT * FROM ussd_sessions WHERE expires_at > CURRENT_TIMESTAMP ORDER BY created_at DESC LIMIT 20'
-    )
-    .all();
+  const rows = db.prepare(
+    'SELECT * FROM ussd_sessions WHERE expires_at > CURRENT_TIMESTAMP ORDER BY created_at DESC LIMIT 20'
+  ).all();
   res.json(rows);
 });
 
 /* ============================================================
-   SMS — Inbound webhook + outbound dispatch + DB log
+   SMS — Real Africa's Talking integration
    ============================================================ */
+
+/**
+ * Inbound SMS webhook (called by Africa's Talking).
+ * AT POSTs form-encoded with fields: from, to, text, date, id, linkId
+ */
 app.post('/sms/webhook', async (req: Request, res: Response) => {
-  const from = String(req.body.from || req.body.from_ || '');
-  const text = String(req.body.text || '').trim().toUpperCase();
+  const from = String(req.body.from || req.body.from_ || req.body.sender || '').trim();
+  const to = String(req.body.to || req.body.recipient || '');
+  const text = String(req.body.text || req.body.message || '').trim();
+  const messageId = String(req.body.id || req.body.messageId || '');
+  const linkId = String(req.body.linkId || '');
 
-  db.prepare(
-    "INSERT INTO sms_log (phone, direction, message, provider) VALUES (?, 'in', ?, 'africastalking')"
-  ).run(from, text);
+  console.log(`[SMS-IN] from=${from} to=${to} text="${text}" id=${messageId}`);
 
-  let reply = 'MundaSense: Reply HELP for options.';
-
-  if (text === 'SOIL') {
-    const farm: any = db
-      .prepare('SELECT * FROM farms WHERE farmer_phone = ? LIMIT 1')
-      .get(from);
-    reply = farm
-      ? `MundaSense: Soil moisture @30cm is ${farm.soil_moisture}%. Crop: ${farm.crop}.`
-      : 'MundaSense: No farm registered to this number.';
-  } else if (text.startsWith('PRICE')) {
-    const crop = text.replace('PRICE', '').trim();
-    const prices = getMarketPrices();
-    const hit = prices.find((p) => p.crop.toUpperCase() === crop);
-    reply = hit
-      ? `MundaSense: ${hit.crop} is ZMW ${hit.price}/kg (${hit.listings} listings).`
-      : `MundaSense: Prices: ${prices.map((p) => `${p.crop} ZMW ${p.price}`).join(', ')}`;
-  } else if (text.startsWith('YES')) {
-    const orderId = parseInt(text.replace('YES', '').trim(), 10);
-    if (orderId) {
-      db.prepare("UPDATE orders SET status = 'confirmed' WHERE id = ?").run(orderId);
-      reply = `MundaSense: Order #${orderId} confirmed. Transport can be arranged.`;
-    }
-  } else if (text.startsWith('NO')) {
-    const orderId = parseInt(text.replace('NO', '').trim(), 10);
-    if (orderId) {
-      db.prepare("UPDATE orders SET status = 'cancelled' WHERE id = ?").run(orderId);
-      reply = `MundaSense: Order #${orderId} declined.`;
-    }
-  } else if (text === 'HELP') {
-    reply = 'MundaSense: SOIL, PRICE <crop>, YES <id>, NO <id>, BULK, HELP';
-  } else if (text === 'BULK') {
-    reply =
-      'MundaSense: Added to Friday cooperative bulk sale. Bring bags to Msekera Depot by 09:00.';
+  if (!from || !text) {
+    return res.status(400).type('text/plain').send('Missing from or text');
   }
 
-  await sendSms(from, reply);
-  res.type('text/plain').send(reply);
+  // Log inbound message
+  db.prepare(
+    "INSERT INTO sms_log (phone, direction, message, provider, provider_id, status) VALUES (?, 'in', ?, 'africastalking', ?, 'received')"
+  ).run(from, text, messageId);
+
+  const upper = text.toUpperCase();
+  const [cmd, arg] = upper.split(/\s+/);
+  let reply = 'MundaSense: Reply HELP for options.';
+
+  try {
+    // SOIL — live soil moisture for the farmer's farm
+    if (cmd === 'SOIL') {
+      const farm: any = db
+        .prepare('SELECT * FROM farms WHERE farmer_phone = ? LIMIT 1')
+        .get(from);
+      reply = farm
+        ? `MundaSense: Soil moisture @30cm is ${Number(farm.soil_moisture).toFixed(1)}%. Crop: ${farm.crop}. Health: ${farm.health_status}.`
+        : 'MundaSense: No farm registered to this number. Dial *384*2873# to register.';
+    }
+
+    // PRICE <crop> — market price query
+    else if (cmd === 'PRICE') {
+      const prices = getMarketPrices();
+      if (arg) {
+        const hit = prices.find((p) => p.crop.toUpperCase() === arg);
+        reply = hit
+          ? `MundaSense: ${hit.crop} is ZMW ${hit.price}/kg (${hit.listings} listings).`
+          : `MundaSense: No listings for ${arg}. Available: ${prices.map((p) => p.crop).join(', ')}`;
+      } else {
+        reply =
+          'MundaSense Prices (ZMW/kg): ' +
+          prices.map((p) => `${p.crop} ${p.price}`).join(', ');
+      }
+    }
+
+    // YES <id> — confirm order
+    else if (cmd === 'YES' && arg) {
+      const orderId = parseInt(arg, 10);
+      const order: any = db
+        .prepare('SELECT * FROM orders WHERE id = ?')
+        .get(orderId);
+      if (order) {
+        db.prepare("UPDATE orders SET status = 'confirmed' WHERE id = ?").run(orderId);
+        reply = `MundaSense: Order #${orderId} CONFIRMED. Total ZMW ${order.total_zmw}. Transport can now be arranged.`;
+      } else {
+        reply = `MundaSense: Order #${orderId} not found.`;
+      }
+    }
+
+    // NO <id> — decline order
+    else if (cmd === 'NO' && arg) {
+      const orderId = parseInt(arg, 10);
+      const order: any = db
+        .prepare('SELECT * FROM orders WHERE id = ?')
+        .get(orderId);
+      if (order) {
+        db.prepare("UPDATE orders SET status = 'cancelled' WHERE id = ?").run(orderId);
+        db.prepare("UPDATE listings SET status = 'available' WHERE id = ?").run(
+          order.listing_id
+        );
+        reply = `MundaSense: Order #${orderId} declined. Listing restored.`;
+      } else {
+        reply = `MundaSense: Order #${orderId} not found.`;
+      }
+    }
+
+    // TRACK <id> — transport status
+    else if (cmd === 'TRACK' && arg) {
+      const reqId = parseInt(arg, 10);
+      const tr: any = db
+        .prepare('SELECT * FROM transport_requests WHERE id = ?')
+        .get(reqId);
+      reply = tr
+        ? `MundaSense: TR-${tr.id} is ${tr.status}. ${tr.pickup_location} → ${tr.dropoff_location}.`
+        : `MundaSense: Transport request TR-${arg} not found.`;
+    }
+
+    // BULK — join Friday cooperative sale
+    else if (cmd === 'BULK') {
+      db.prepare(
+        "INSERT INTO advisories (farm_phone, channel, category, message) VALUES (?, 'SMS', 'Market', 'Joined Friday bulk sale')"
+      ).run(from);
+      reply =
+        'MundaSense: You are registered for Friday bulk sale at Msekera Depot. Bring moisture-tested bags by 09:00.';
+    }
+
+    // HELP — command list
+    else if (cmd === 'HELP') {
+      reply =
+        'MundaSense Commands:\nSOIL - soil moisture\nPRICE <crop> - market price\nYES <id> - confirm order\nNO <id> - decline order\nTRACK <id> - transport status\nBULK - join Friday sale\nHELP - this list';
+    }
+
+    // Unknown — guide to USSD
+    else {
+      reply = `MundaSense: Unknown command "${text.slice(0, 20)}". Reply HELP for commands or dial *384*2873#.`;
+    }
+
+    // Send reply via real SMS
+    const sendResult = await sendSms(from, reply);
+    console.log(`[SMS-OUT] to=${from} status=${sendResult.status}`);
+
+    // Return reply to AT (used for outbound webhook config)
+    res.type('text/plain').send(reply);
+  } catch (e: any) {
+    console.error('[SMS webhook error]', e);
+    res.status(500).type('text/plain').send('MundaSense: Server error');
+  }
 });
 
-/* Read SMS log from DB (for simulator UI) */
+/**
+ * Send a test SMS on demand (for admin / demo).
+ */
+app.post('/api/sms/send', requireAuth, async (req: Request, res: Response) => {
+  const { to, message } = req.body;
+  if (!to || !message) {
+    return res.status(400).json({ error: 'to and message required' });
+  }
+  const result = await sendSms(String(to), String(message));
+  res.json(result);
+});
+
+/**
+ * Send bulk SMS campaign (admin only).
+ */
+app.post('/api/sms/bulk', requireAuth, async (req: Request, res: Response) => {
+  const { message, phones, province, crop } = req.body;
+  if (!message) return res.status(400).json({ error: 'message required' });
+
+  // Build recipient list
+  let recipients: string[] = [];
+
+  if (Array.isArray(phones) && phones.length) {
+    recipients = phones;
+  } else {
+    // Query farms by province/crop
+    let sql = 'SELECT DISTINCT farmer_phone FROM farms WHERE 1=1';
+    const params: any[] = [];
+    if (province) {
+      sql += ' AND province = ?';
+      params.push(province);
+    }
+    if (crop) {
+      sql += ' AND crop = ?';
+      params.push(crop);
+    }
+    const rows = db.prepare(sql).all(...params) as any[];
+    recipients = rows.map((r) => r.farmer_phone);
+  }
+
+  if (!recipients.length) {
+    return res.status(400).json({ error: 'no recipients found' });
+  }
+
+  const summary = await sendBulkSms(recipients, String(message));
+  res.json(summary);
+});
+
+/**
+ * Read SMS log for a phone (used by simulator UI).
+ */
 app.get('/api/sms/log', (req: Request, res: Response) => {
   const phone = String(req.query.phone || '').trim();
-  if (!phone) return res.status(400).json({ error: 'phone query param required' });
+  if (!phone) return res.status(400).json({ error: 'phone required' });
 
   const rows = db
     .prepare('SELECT * FROM sms_log WHERE phone = ? ORDER BY id DESC LIMIT 50')
     .all(phone);
 
   res.json((rows as any[]).reverse());
+});
+
+/**
+ * SMS account balance.
+ */
+app.get('/api/sms/balance', requireAuth, async (_req: Request, res: Response) => {
+  const balance = await getAccountBalance();
+  res.json(balance);
+});
+
+/**
+ * Recent SMS deliveries (for monitoring).
+ */
+app.get('/api/sms/recent', requireAuth, (_req: Request, res: Response) => {
+  const rows = db
+    .prepare(
+      "SELECT * FROM sms_log WHERE direction = 'out' ORDER BY id DESC LIMIT 30"
+    )
+    .all();
+  res.json(rows);
 });
 
 /* ============================================================
@@ -221,24 +380,9 @@ interface SensorState {
 }
 
 const hubState: Record<number, SensorState> = {
-  1: {
-    hub_id: 1, soil_15: 24.5, soil_30: 28.8, soil_60: 33.2,
-    temperature: 21.9, humidity: 78, rainfall: 0,
-    battery_v: 13.2, solar_v: 5.8, signal_dbm: -88,
-    timestamp: new Date().toISOString(),
-  },
-  2: {
-    hub_id: 2, soil_15: 26.1, soil_30: 30.2, soil_60: 35.8,
-    temperature: 23.4, humidity: 71, rainfall: 0,
-    battery_v: 12.8, solar_v: 6.1, signal_dbm: -92,
-    timestamp: new Date().toISOString(),
-  },
-  3: {
-    hub_id: 3, soil_15: 22.8, soil_30: 27.4, soil_60: 31.9,
-    temperature: 24.8, humidity: 65, rainfall: 0,
-    battery_v: 13.5, solar_v: 6.3, signal_dbm: -84,
-    timestamp: new Date().toISOString(),
-  },
+  1: { hub_id: 1, soil_15: 24.5, soil_30: 28.8, soil_60: 33.2, temperature: 21.9, humidity: 78, rainfall: 0, battery_v: 13.2, solar_v: 5.8, signal_dbm: -88, timestamp: new Date().toISOString() },
+  2: { hub_id: 2, soil_15: 26.1, soil_30: 30.2, soil_60: 35.8, temperature: 23.4, humidity: 71, rainfall: 0, battery_v: 12.8, solar_v: 6.1, signal_dbm: -92, timestamp: new Date().toISOString() },
+  3: { hub_id: 3, soil_15: 22.8, soil_30: 27.4, soil_60: 31.9, temperature: 24.8, humidity: 65, rainfall: 0, battery_v: 13.5, solar_v: 6.3, signal_dbm: -84, timestamp: new Date().toISOString() },
 };
 
 function updateSensors() {
@@ -246,9 +390,7 @@ function updateSensors() {
   for (const s of Object.values(hubState)) {
     const dailyTemp = 22 + 8 * Math.sin(((hour - 9) * Math.PI) / 12);
     s.temperature = +(dailyTemp + (Math.random() - 0.5) * 0.6).toFixed(1);
-    s.humidity = Math.round(
-      Math.max(30, Math.min(95, 92 - (s.temperature - 15) * 1.8 + (Math.random() - 0.5) * 4))
-    );
+    s.humidity = Math.round(Math.max(30, Math.min(95, 92 - (s.temperature - 15) * 1.8 + (Math.random() - 0.5) * 4)));
 
     const isRaining = Math.random() < 0.05;
     s.rainfall = isRaining ? +(Math.random() * 8).toFixed(1) : 0;
@@ -270,9 +412,7 @@ function updateSensors() {
 
     const isDaylight = hour > 6 && hour < 18;
     s.solar_v = isDaylight ? +(5.5 + Math.random() * 1.2).toFixed(2) : 0;
-    s.battery_v = isDaylight
-      ? Math.min(13.6, s.battery_v + 0.02)
-      : Math.max(11.5, s.battery_v - 0.03);
+    s.battery_v = isDaylight ? Math.min(13.6, s.battery_v + 0.02) : Math.max(11.5, s.battery_v - 0.03);
     s.timestamp = new Date().toISOString();
   }
 }
@@ -288,9 +428,7 @@ app.get('/api/live/stream', (req: Request, res: Response) => {
   });
   res.flushHeaders();
   sseClients.add(res);
-  res.write(
-    `data: ${JSON.stringify({ type: 'snapshot', hubs: Object.values(hubState) })}\n\n`
-  );
+  res.write(`data: ${JSON.stringify({ type: 'snapshot', hubs: Object.values(hubState) })}\n\n`);
   req.on('close', () => sseClients.delete(res));
 });
 
@@ -321,6 +459,7 @@ interface TrackingPoint {
 
 const transportRoutes: Map<number, TrackingPoint[]> = new Map();
 
+// Seed active route (Msekera → Lusaka along Great East Road)
 transportRoutes.set(42, [
   { lat: -13.6333, lng: 32.65, speed_kmh: 55, timestamp: new Date(Date.now() - 3600000).toISOString() },
   { lat: -13.85, lng: 32.45, speed_kmh: 62, timestamp: new Date(Date.now() - 3000000).toISOString() },
@@ -331,10 +470,12 @@ transportRoutes.set(42, [
   { lat: -15.3333, lng: 28.6833, speed_kmh: 45, timestamp: new Date().toISOString() },
 ]);
 
+// Auto-advance truck every 10s
 setInterval(() => {
   const route = transportRoutes.get(42);
   if (!route) return;
   const last = route[route.length - 1];
+
   if (last.lat > -15.42) {
     const next: TrackingPoint = {
       lat: +(last.lat - 0.025 + (Math.random() - 0.5) * 0.015).toFixed(4),
@@ -378,16 +519,13 @@ app.get('/api/transport/:id/track', (req: Request, res: Response) => {
 });
 
 /* ============================================================
-   MARKETPLACE (REAL DB)
+   MOUNT API ROUTERS
    ============================================================ */
-app.get('/api/marketplace', (req: Request, res: Response) => {
-  const crop = req.query.crop as string | undefined;
-  res.json(listActiveListings(crop));
-});
-
-app.get('/api/marketplace/prices', (_req: Request, res: Response) => {
-  res.json(getMarketPrices());
-});
+app.use('/api', marketplaceRouter);
+app.use('/api', advisoriesRouter);
+app.use('/api', sensorsRouter);
+app.use('/api', storageRouter);
+app.use('/api', transportRouter);
 
 /* ============================================================
    FARMS (REAL DB)
@@ -398,108 +536,75 @@ app.get('/api/farms', (_req: Request, res: Response) => {
 });
 
 /* ============================================================
-   DISEASE SCREENING (REAL GEMINI)
+   DISEASE SCREENING (REAL GEMINI 2.5 FLASH VISION + SQLITE)
    ============================================================ */
-const GEMINI_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-let ai: GoogleGenAI | null = null;
-if (GEMINI_KEY) {
-  ai = new GoogleGenAI({
-    apiKey: GEMINI_KEY,
-    httpOptions: { headers: { 'User-Agent': 'mundasense-v2' } },
-  });
-}
-const GEMINI_MODEL = 'gemini-2.5-flash';
-
 app.post('/api/disease/analyze', async (req: Request, res: Response) => {
-  const { crop = 'Maize', image_data, farm_id = 1 } = req.body;
-  if (!image_data) return res.status(400).json({ error: 'Missing image_data' });
+  const {
+    image_data,
+    crop = 'Maize',
+    farm_id,
+    phone,
+    farm_context = '',
+    weather_context = '',
+  } = req.body;
 
-  if (ai && typeof image_data === 'string' && image_data.startsWith('data:image')) {
-    const match = image_data.match(/^data:([A-Za-z-+/]+);base64,(.+)$/);
-    if (match) {
-      const [, mimeType, base64Data] = match;
-      const prompt = `You are the MundaSense AI Agronomy Screening Engine for Zambian smallholders.
-
-Analyze this ${crop} leaf image. Focus on these diseases common in Zambia:
-- Maize: Northern Corn Leaf Blight, Common Rust, Gray Leaf Spot, Fall Armyworm, Streak Virus
-- Groundnuts: Early/Late Leaf Spot, Rust, Rosette
-- Soybean: Rust, Bacterial Pustule
-- Tomato: Early/Late Blight, Bacterial Spot, TYLCV
-- Cassava: Mosaic, Brown Streak
-- Banana: Panama, Black Sigatoka
-- Cotton: Bacterial Blight
-- Also detect Healthy state
-
-Return ONLY valid JSON:
-{
-  "crop": "${crop}",
-  "prediction": "disease name or Healthy",
-  "pathogen": "scientific name",
-  "confidence": 0.87,
-  "severity": "none" | "low" | "moderate" | "high" | "critical",
-  "risk": "LOW" | "WATCH" | "HIGH",
-  "symptoms": "visible symptoms in 1 sentence",
-  "recommendation": "practical low-cost treatment",
-  "prevention": "next-season prevention",
-  "needs_expert_review": boolean
-}`;
-
-      try {
-        const response = await ai.models.generateContent({
-          model: GEMINI_MODEL,
-          contents: {
-            parts: [
-              { inlineData: { mimeType, data: base64Data } },
-              { text: prompt },
-            ],
-          },
-          config: {
-            responseMimeType: 'application/json',
-            systemInstruction:
-              'Expert crop pathologist for sub-Saharan Africa. Be conservative. Recommend locally available treatments. Never diagnose with false confidence.',
-          },
-        });
-
-        const parsed = JSON.parse(response.text || '{}');
-        return res.json({
-          farm_id,
-          crop: parsed.crop || crop,
-          prediction: parsed.prediction || 'Unspecified',
-          pathogen: parsed.pathogen || 'Unknown',
-          confidence: parsed.confidence ?? 0.82,
-          severity: parsed.severity || 'moderate',
-          risk: parsed.risk || 'WATCH',
-          symptoms: parsed.symptoms || 'Foliar anomaly detected',
-          recommendation: parsed.recommendation || 'Consult extension officer',
-          prevention: parsed.prevention || '',
-          needs_expert_review: Boolean(
-            parsed.needs_expert_review ?? (parsed.confidence < 0.75)
-          ),
-          report_id: Date.now(),
-        });
-      } catch (e: any) {
-        console.warn('[Gemini analyze error]', e?.message || e);
-      }
-    }
+  if (!image_data || typeof image_data !== 'string') {
+    return res.status(400).json({
+      error: 'image_data (base64 data URL) is required',
+    });
   }
 
-  return res.json({
-    farm_id,
-    crop,
-    prediction: crop.toLowerCase().includes('tomato')
-      ? 'Early Blight (Alternaria solani)'
-      : 'Northern Corn Leaf Blight (Exserohilum turcicum)',
-    pathogen: crop.toLowerCase().includes('tomato')
-      ? 'Alternaria solani'
-      : 'Exserohilum turcicum',
-    confidence: 0.85,
-    severity: 'moderate',
-    risk: 'WATCH',
-    symptoms: 'Elongated grey-green lesions parallel to leaf veins.',
-    recommendation: 'Inspect surrounding plants and notify extension officer.',
-    prevention: 'Crop rotation and field hygiene.',
-    needs_expert_review: false,
-    report_id: Date.now(),
+  if (image_data.length > 8_000_000) {
+    return res.status(413).json({ error: 'Image too large — max ~6 MB' });
+  }
+
+  try {
+    const result = await analyzeLeafImage({
+      imageDataUrl: image_data,
+      cropHint: String(crop),
+      farmId: farm_id ? Number(farm_id) : undefined,
+      phone: phone ? String(phone) : undefined,
+      farmContext: String(farm_context),
+      weatherContext: String(weather_context),
+    });
+    return res.json(result);
+  } catch (e: any) {
+    console.error('[Disease analyze error]', e);
+    return res.status(500).json({
+      error: 'Screening pipeline failed',
+      detail: e?.message,
+    });
+  }
+});
+
+app.get('/api/disease/reports', (req: Request, res: Response) => {
+  const phone = req.query.phone as string | undefined;
+  if (phone) {
+    return res.json(listDiseaseReportsForPhone(phone));
+  }
+  const limit = Math.min(200, Number(req.query.limit) || 50);
+  res.json(getRecentReports(limit));
+});
+
+app.get('/api/disease/crops', (_req: Request, res: Response) => {
+  res.json({
+    crops: getCropList(),
+    gemini: geminiStatus(),
+  });
+});
+
+app.get('/api/disease/status', (_req: Request, res: Response) => {
+  res.json(geminiStatus());
+});
+
+app.get('/api/disease/treatment/:diseaseName', (req: Request, res: Response) => {
+  import('./server/treatmentDatabase.ts').then(({ getTreatmentPlan, estimateTreatmentCost }) => {
+    const disease = decodeURIComponent(req.params.diseaseName);
+    const plan = getTreatmentPlan(disease);
+    const cost = estimateTreatmentCost(disease, Number(req.query.hectares) || 1);
+    res.json({ plan, cost });
+  }).catch((e) => {
+    res.status(500).json({ error: 'Treatment lookup failed', detail: e.message });
   });
 });
 
@@ -509,8 +614,7 @@ Return ONLY valid JSON:
 app.get('/api/health', (_req: Request, res: Response) => {
   const usersCount = (db.prepare('SELECT COUNT(*) as c FROM users').get() as any)?.c || 0;
   const farmsCount = (db.prepare('SELECT COUNT(*) as c FROM farms').get() as any)?.c || 0;
-  const listingsCount =
-    (db.prepare("SELECT COUNT(*) as c FROM listings WHERE status = 'available'").get() as any)?.c || 0;
+  const listingsCount = (db.prepare("SELECT COUNT(*) as c FROM listings WHERE status = 'available'").get() as any)?.c || 0;
 
   res.json({
     status: 'ok',
@@ -520,10 +624,11 @@ app.get('/api/health', (_req: Request, res: Response) => {
     users_registered: usersCount,
     farms_in_db: farmsCount,
     active_listings: listingsCount,
-    gemini_enabled: Boolean(ai),
-    gemini_model: ai ? GEMINI_MODEL : null,
+    gemini_enabled: geminiStatus().enabled,
+    gemini_model: geminiStatus().model,
+    disease_reports: (db.prepare('SELECT COUNT(*) as c FROM crop_health_reports').get() as any)?.c || 0,
     ussd_shortcode: '*2873#',
-    ussd_endpoint: "/ussd (Africa's Talking compatible)",
+    ussd_endpoint: '/ussd (Africa\'s Talking compatible)',
     at_sms_configured: Boolean(process.env.AT_API_KEY),
   });
 });
@@ -534,16 +639,11 @@ app.get('/api/health', (_req: Request, res: Response) => {
 async function startServer() {
   const isProd = process.env.NODE_ENV === 'production';
   if (!isProd) {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
-    });
+    const vite = await createViteServer({ server: { middlewareMode: true }, appType: 'spa' });
     app.use(vite.middlewares);
   } else {
     app.use(express.static(path.resolve('dist')));
-    app.get('*', (_req: Request, res: Response) =>
-      res.sendFile(path.resolve('dist/index.html'))
-    );
+    app.get('*', (_req: Request, res: Response) => res.sendFile(path.resolve('dist/index.html')));
   }
 
   app.listen(PORT, '0.0.0.0', () => {
@@ -552,8 +652,8 @@ async function startServer() {
     console.log(`💾 SQLite DB: data/mundasense.db`);
     console.log(`📡 Live SSE stream at /api/live/stream`);
     console.log(`🚚 Transport tracking at /api/transport/:id/track`);
-    console.log(`🤖 Gemini: ${ai ? `ENABLED (${GEMINI_MODEL})` : 'OFFLINE'}`);
-    console.log(`📱 SMS: ${process.env.AT_API_KEY ? "LIVE (Africa's Talking)" : 'log-only'}`);
+    console.log(`🤖 Gemini: ${geminiStatus().enabled ? `ENABLED (${geminiStatus().model})` : 'OFFLINE'}`);
+    console.log(`📱 SMS: ${process.env.AT_API_KEY ? 'LIVE (Africa\'s Talking)' : 'log-only'}`);
   });
 }
 

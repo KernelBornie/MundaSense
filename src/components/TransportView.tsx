@@ -1,0 +1,602 @@
+import React, { useState } from 'react';
+import { usePolling } from '../hooks/usePolling';
+import { useAuth } from '../auth/AuthContext';
+import {
+  Truck,
+  PlusCircle,
+  Phone,
+  Mail,
+  MapPin,
+  Clock,
+  DollarSign,
+  CheckCircle2,
+  X,
+  Loader2,
+  Package,
+  Layers,
+  Check,
+  ChevronRight,
+} from 'lucide-react';
+
+interface TransportRequest {
+  id: number;
+  requester_phone: string;
+  order_id?: number;
+  pickup_location: string;
+  dropoff_location: string;
+  cargo_description?: string;
+  weight_kg?: number;
+  budget_zmw?: number;
+  contact_name?: string;
+  contact_phone?: string;
+  status: 'open' | 'assigned' | 'in_transit' | 'delivered';
+  created_at: string;
+}
+
+interface TransportBid {
+  id: number;
+  request_id: number;
+  transporter_phone: string;
+  price_zmw: number;
+  vehicle?: string;
+  eta_hours?: number;
+  status: 'pending' | 'accepted' | 'rejected';
+  created_at: string;
+  transporter_name?: string;
+  transporter_email?: string;
+}
+
+export function TransportView() {
+  const { user } = useAuth();
+  const { data: requests, refresh: refreshRequests, loading, tick } = usePolling<TransportRequest[]>(
+    '/api/transport/requests',
+    5000
+  );
+
+  // Selected Request Bids Modal
+  const [selectedRequestId, setSelectedRequestId] = useState<number | null>(null);
+  const [bids, setBids] = useState<TransportBid[]>([]);
+  const [loadingBids, setLoadingBids] = useState(false);
+
+  // Place Bid Modal
+  const [isBiddingModalOpen, setIsBiddingModalOpen] = useState(false);
+  const [bidPrice, setBidPrice] = useState<number>(3500);
+  const [bidVehicle, setBidVehicle] = useState<string>('7-Ton Isuzu Canter');
+  const [bidEta, setBidEta] = useState<number>(6);
+  const [submittingBid, setSubmittingBid] = useState(false);
+
+  // Create Request Modal
+  const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [pickup, setPickup] = useState('Msekera Research Station, Chipata');
+  const [dropoff, setDropoff] = useState('National Milling Corp, Lusaka');
+  const [cargo, setCargo] = useState('Cleaned White Maize (Grade A)');
+  const [weight, setWeight] = useState(15000);
+  const [budget, setBudget] = useState(4800);
+  const [contactName, setContactName] = useState('Chanda Mwape');
+  const [contactPhone, setContactPhone] = useState('+260970000002');
+  const [submittingReq, setSubmittingReq] = useState(false);
+
+  const [toast, setToast] = useState<string | null>(null);
+
+  const showToast = (msg: string) => {
+    setToast(msg);
+    setTimeout(() => setToast(null), 4500);
+  };
+
+  const loadBids = async (requestId: number) => {
+    setSelectedRequestId(requestId);
+    setLoadingBids(true);
+    try {
+      const res = await fetch(`/api/transport/requests/${requestId}/bids`);
+      if (res.ok) {
+        const json = await res.json();
+        setBids(json);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoadingBids(false);
+    }
+  };
+
+  const handlePlaceBid = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedRequestId) return;
+    setSubmittingBid(true);
+    try {
+      const transporterPhone = user?.phone || '+260970000005';
+      const res = await fetch(`/api/transport/requests/${selectedRequestId}/bids`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          transporter_phone: transporterPhone,
+          price_zmw: bidPrice,
+          vehicle: bidVehicle,
+          eta_hours: bidEta,
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      showToast('Bid placed successfully! Notification sent to cargo owner.');
+      setIsBiddingModalOpen(false);
+      loadBids(selectedRequestId);
+      refreshRequests();
+    } catch (err: any) {
+      alert(`Failed to place bid: ${err.message}`);
+    } finally {
+      setSubmittingBid(false);
+    }
+  };
+
+  const handleAcceptBid = async (bidId: number) => {
+    try {
+      const res = await fetch(`/api/transport/bids/${bidId}/accept`, { method: 'POST' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      showToast('Bid accepted! Transporter and client notified via SMS.');
+      if (selectedRequestId) loadBids(selectedRequestId);
+      refreshRequests();
+    } catch (err: any) {
+      alert(`Accept failed: ${err.message}`);
+    }
+  };
+
+  const handleCreateRequest = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSubmittingReq(true);
+    try {
+      const reqPhone = user?.phone || '+260970000002';
+      const res = await fetch('/api/transport/requests', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          requester_phone: reqPhone,
+          pickup_location: pickup,
+          dropoff_location: dropoff,
+          cargo_description: cargo,
+          weight_kg: weight,
+          budget_zmw: budget,
+          contact_name: contactName,
+          contact_phone: contactPhone,
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      showToast('Transport dispatch request broadcast to regional transporters!');
+      setIsCreateOpen(false);
+      refreshRequests();
+    } catch (err: any) {
+      alert(`Failed to create request: ${err.message}`);
+    } finally {
+      setSubmittingReq(false);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Toast Notification */}
+      {toast && (
+        <div className="fixed bottom-6 right-6 z-50 bg-emerald-600 text-white px-5 py-3 rounded-2xl shadow-2xl flex items-center gap-2 text-xs font-bold border border-emerald-400 animate-in fade-in slide-in-from-bottom-2">
+          <CheckCircle2 className="w-4 h-4 text-white" />
+          <span>{toast}</span>
+        </div>
+      )}
+
+      {/* Top Banner */}
+      <div className="bg-[#101b13] border border-[#1e3623] rounded-2xl p-5 shadow-xl">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="p-2 rounded-xl bg-emerald-950/80 border border-emerald-800 text-emerald-400">
+                <Truck className="w-5 h-5" />
+              </span>
+              <h1 className="text-xl font-bold text-white tracking-tight">
+                Rural Logistics & Transport Dispatch
+              </h1>
+            </div>
+            <p className="text-xs text-gray-400 mt-1 max-w-2xl leading-relaxed">
+              Decentralized freight marketplace connecting grain sellers with verified local transporters, fleet owners,
+              and back-haul trucks across Zambia's agricultural corridors.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#152718] border border-[#234329] text-xs font-mono">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+              <span className="text-emerald-400 font-bold">LIVE · Tick #{tick}</span>
+              <span className="text-gray-500">·</span>
+              <span className="text-gray-400">{requests?.length || 0} Loads</span>
+            </div>
+
+            <button
+              onClick={() => setIsCreateOpen(true)}
+              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-lg shadow-emerald-950 transition cursor-pointer"
+            >
+              <PlusCircle className="w-4 h-4" />
+              Request Cargo Haulage
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Requests Table / Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {(requests || []).map((req) => (
+          <div
+            key={req.id}
+            className="bg-[#101b13] border border-[#1e3623] hover:border-emerald-600/70 rounded-2xl p-5 shadow-lg flex flex-col justify-between transition group"
+          >
+            <div className="space-y-3">
+              {/* Header */}
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-base font-bold text-white">TR-{req.id}</span>
+                    <span className="text-xs text-emerald-400 font-mono font-semibold">
+                      {req.weight_kg ? `${Number(req.weight_kg).toLocaleString()} kg` : 'Full Truckload'}
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-gray-400 font-mono mt-0.5">
+                    {req.cargo_description || 'Grain Commodity'}
+                  </div>
+                </div>
+
+                <span
+                  className={`px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase border ${
+                    req.status === 'open'
+                      ? 'bg-emerald-950 text-emerald-300 border-emerald-700'
+                      : req.status === 'assigned'
+                      ? 'bg-blue-950 text-blue-300 border-blue-700'
+                      : req.status === 'in_transit'
+                      ? 'bg-amber-950 text-amber-300 border-amber-700'
+                      : 'bg-gray-900 text-gray-400 border-gray-700'
+                  }`}
+                >
+                  {req.status}
+                </span>
+              </div>
+
+              {/* Route */}
+              <div className="p-3 rounded-xl bg-[#142317] border border-[#223e28] space-y-2 text-xs font-mono">
+                <div className="flex items-start gap-2">
+                  <MapPin className="w-3.5 h-3.5 text-emerald-400 mt-0.5 flex-shrink-0" />
+                  <div>
+                    <div className="text-[10px] text-gray-400 uppercase">Pickup</div>
+                    <div className="text-white font-semibold">{req.pickup_location}</div>
+                  </div>
+                </div>
+                <div className="flex items-start gap-2">
+                  <MapPin className="w-3.5 h-3.5 text-cyan-400 mt-0.5 flex-shrink-0" />
+                  <div>
+                    <div className="text-[10px] text-gray-400 uppercase">Dropoff</div>
+                    <div className="text-white font-semibold">{req.dropoff_location}</div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Budget & Contact */}
+              <div className="flex items-center justify-between text-xs px-1 font-mono">
+                <span className="text-gray-400">Target Budget:</span>
+                <span className="font-bold text-white">
+                  ZMW {req.budget_zmw ? Number(req.budget_zmw).toLocaleString() : 'Negotiable'}
+                </span>
+              </div>
+
+              {/* Requester Contact */}
+              <div className="pt-2 border-t border-[#1a2d1f] space-y-1 text-xs">
+                <div className="text-[10px] text-gray-400 uppercase font-mono">Requester Contact</div>
+                <div className="text-gray-200 font-semibold">{req.contact_name || 'Farmer / Cooperative'}</div>
+                <a
+                  href={`tel:${req.contact_phone || req.requester_phone}`}
+                  className="inline-flex items-center gap-1.5 text-emerald-400 hover:text-emerald-300 hover:underline font-mono text-[11px]"
+                >
+                  <Phone className="w-3.5 h-3.5 text-emerald-500" />
+                  <span>📞 {req.contact_phone || req.requester_phone}</span>
+                </a>
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div className="mt-4 pt-3 border-t border-[#1a2d1f] flex items-center gap-2">
+              <button
+                onClick={() => loadBids(req.id)}
+                className="flex-1 py-2 rounded-xl bg-[#142618] hover:bg-[#1a3821] text-emerald-300 border border-[#234329] text-xs font-bold flex items-center justify-center gap-1.5 transition cursor-pointer"
+              >
+                <Layers className="w-3.5 h-3.5" />
+                View Bids
+              </button>
+              {req.status === 'open' && (
+                <button
+                  onClick={() => {
+                    setSelectedRequestId(req.id);
+                    setIsBiddingModalOpen(true);
+                  }}
+                  className="flex-1 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 shadow transition cursor-pointer"
+                >
+                  <DollarSign className="w-3.5 h-3.5" />
+                  Submit Bid
+                </button>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Bids Modal */}
+      {selectedRequestId && !isBiddingModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#101b13] border border-[#1e3623] rounded-2xl max-w-2xl w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-[#1e3623] pb-3">
+              <div>
+                <h3 className="text-base font-bold text-white">Transporter Bids for TR-{selectedRequestId}</h3>
+                <p className="text-xs text-gray-400 font-mono">Competitive freight offers submitted by registered drivers</p>
+              </div>
+              <button
+                onClick={() => setSelectedRequestId(null)}
+                className="p-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-[#1a2d1f] transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              {loadingBids ? (
+                <div className="py-8 text-center text-gray-400 font-mono text-xs">Loading bids…</div>
+              ) : bids.length === 0 ? (
+                <div className="py-8 text-center text-gray-500 font-sans text-xs">
+                  No bids submitted yet for this route. Be the first to place a bid!
+                </div>
+              ) : (
+                bids.map((b) => (
+                  <div
+                    key={b.id}
+                    className="p-4 rounded-xl bg-[#142317] border border-[#223e28] flex items-center justify-between gap-4"
+                  >
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-white text-sm">
+                          ZMW {Number(b.price_zmw).toLocaleString()}
+                        </span>
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[10px] uppercase font-mono font-bold border ${
+                            b.status === 'accepted'
+                              ? 'bg-emerald-950 text-emerald-300 border-emerald-700'
+                              : b.status === 'rejected'
+                              ? 'bg-rose-950 text-rose-300 border-rose-800'
+                              : 'bg-amber-950 text-amber-300 border-amber-800'
+                          }`}
+                        >
+                          {b.status}
+                        </span>
+                      </div>
+                      <div className="text-xs text-gray-300 font-mono">
+                        Vehicle: {b.vehicle || 'Standard Truck'} · ETA: {b.eta_hours || 4}h
+                      </div>
+                      <div className="flex items-center gap-3 text-xs font-mono pt-1">
+                        <a
+                          href={`tel:${b.transporter_phone}`}
+                          className="inline-flex items-center gap-1 text-emerald-400 hover:underline"
+                        >
+                          <Phone className="w-3 h-3" />
+                          <span>📞 {b.transporter_phone}</span>
+                        </a>
+                        {b.transporter_email && (
+                          <a
+                            href={`mailto:${b.transporter_email}`}
+                            className="inline-flex items-center gap-1 text-cyan-400 hover:underline"
+                          >
+                            <Mail className="w-3 h-3" />
+                            <span>✉️ {b.transporter_email}</span>
+                          </a>
+                        )}
+                      </div>
+                    </div>
+
+                    {b.status === 'pending' && (
+                      <button
+                        onClick={() => handleAcceptBid(b.id)}
+                        className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer transition"
+                      >
+                        <Check className="w-3.5 h-3.5" />
+                        Accept Bid
+                      </button>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Submit Bid Modal */}
+      {isBiddingModalOpen && selectedRequestId && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#101b13] border border-[#1e3623] rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-[#1e3623] pb-3">
+              <div>
+                <h3 className="text-base font-bold text-white">Submit Freight Bid</h3>
+                <p className="text-xs text-gray-400 font-mono">Offer on request TR-{selectedRequestId}</p>
+              </div>
+              <button
+                onClick={() => setIsBiddingModalOpen(false)}
+                className="p-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-[#1a2d1f] transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handlePlaceBid} className="space-y-3.5 text-xs">
+              <div>
+                <label className="text-[11px] font-semibold text-gray-400 uppercase block mb-1">
+                  Price Offer (ZMW)
+                </label>
+                <input
+                  type="number"
+                  min="500"
+                  step="50"
+                  value={bidPrice}
+                  onChange={(e) => setBidPrice(Number(e.target.value))}
+                  className="w-full px-3 py-2 bg-[#152418] border border-[#233f28] rounded-xl text-xs text-emerald-400 font-bold font-mono focus:outline-none focus:border-emerald-500"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] font-semibold text-gray-400 uppercase block mb-1">
+                  Vehicle Type / Capacity
+                </label>
+                <input
+                  type="text"
+                  value={bidVehicle}
+                  onChange={(e) => setBidVehicle(e.target.value)}
+                  placeholder="e.g. 7-Ton Isuzu Canter, Flatbed..."
+                  className="w-full px-3 py-2 bg-[#152418] border border-[#233f28] rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] font-semibold text-gray-400 uppercase block mb-1">
+                  Estimated Arrival Time (Hours)
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  max="48"
+                  value={bidEta}
+                  onChange={(e) => setBidEta(Number(e.target.value))}
+                  className="w-full px-3 py-2 bg-[#152418] border border-[#233f28] rounded-xl text-xs text-white font-mono focus:outline-none focus:border-emerald-500"
+                  required
+                />
+              </div>
+
+              <div className="flex items-center gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsBiddingModalOpen(false)}
+                  className="flex-1 py-2.5 bg-[#152418] hover:bg-[#1f3724] text-gray-300 border border-[#223d27] rounded-xl font-bold cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={submittingBid}
+                  className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-xl font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  {submittingBid ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Confirm Bid'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* New Request Modal */}
+      {isCreateOpen && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#101b13] border border-[#1e3623] rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-[#1e3623] pb-3">
+              <div>
+                <h3 className="text-base font-bold text-white">Post New Haulage Request</h3>
+                <p className="text-xs text-gray-400">Broadcast load details to verified transporters</p>
+              </div>
+              <button
+                onClick={() => setIsCreateOpen(false)}
+                className="p-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-[#1a2d1f] transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateRequest} className="space-y-3 text-xs">
+              <div>
+                <label className="text-[11px] font-semibold text-gray-400 uppercase block mb-1">
+                  Pickup Location
+                </label>
+                <input
+                  type="text"
+                  value={pickup}
+                  onChange={(e) => setPickup(e.target.value)}
+                  className="w-full px-3 py-2 bg-[#152418] border border-[#233f28] rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] font-semibold text-gray-400 uppercase block mb-1">
+                  Dropoff Location
+                </label>
+                <input
+                  type="text"
+                  value={dropoff}
+                  onChange={(e) => setDropoff(e.target.value)}
+                  className="w-full px-3 py-2 bg-[#152418] border border-[#233f28] rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
+                  required
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[11px] font-semibold text-gray-400 uppercase block mb-1">
+                    Weight (kg)
+                  </label>
+                  <input
+                    type="number"
+                    min="100"
+                    step="100"
+                    value={weight}
+                    onChange={(e) => setWeight(Number(e.target.value))}
+                    className="w-full px-3 py-2 bg-[#152418] border border-[#233f28] rounded-xl text-xs text-white font-mono focus:outline-none focus:border-emerald-500"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[11px] font-semibold text-gray-400 uppercase block mb-1">
+                    Budget (ZMW)
+                  </label>
+                  <input
+                    type="number"
+                    min="100"
+                    step="100"
+                    value={budget}
+                    onChange={(e) => setBudget(Number(e.target.value))}
+                    className="w-full px-3 py-2 bg-[#152418] border border-[#233f28] rounded-xl text-xs text-emerald-400 font-mono focus:outline-none focus:border-emerald-500"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[11px] font-semibold text-gray-400 uppercase block mb-1">
+                  Cargo Description
+                </label>
+                <input
+                  type="text"
+                  value={cargo}
+                  onChange={(e) => setCargo(e.target.value)}
+                  className="w-full px-3 py-2 bg-[#152418] border border-[#233f28] rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+
+              <div className="flex items-center gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsCreateOpen(false)}
+                  className="flex-1 py-2.5 bg-[#152418] hover:bg-[#1f3724] text-gray-300 border border-[#223d27] rounded-xl font-bold cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={submittingReq}
+                  className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-xl font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  {submittingReq ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Post Request'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

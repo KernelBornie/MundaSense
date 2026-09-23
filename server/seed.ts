@@ -15,31 +15,27 @@ const VILLAGES_CENTRAL = ['Mkushi','Mumbwa','Chibombo','Serenje','Kabwe'];
 
 export function seedDatabase() {
   const userCount = (db.prepare('SELECT COUNT(*) as c FROM users').get() as any).c;
-  if (userCount > 0) {
-    console.log(`[seed] Database already has ${userCount} users — skipping seed`);
-    return;
-  }
+  if (userCount === 0) {
+    console.log('[seed] Seeding users...');
+    // Demo role accounts (login via app with email or phone)
+    const demoAccounts = [
+      { email: 'admin@mundasense.zm', phone: '+260970000001', name: 'Dr. Joseph Banda', role: 'admin', village: 'Lusaka', province: 'Lusaka' },
+      { email: 'farmer@mundasense.zm', phone: '+260970000002', name: 'Chanda Mwape', role: 'farmer', village: 'Msekera', province: 'Eastern', ziamis_id: 'ZM-EAS-84001' },
+      { email: 'seller@mundasense.zm', phone: '+260970000004', name: 'Msekera Cooperative Union', role: 'seller', village: 'Msekera', province: 'Eastern' },
+      { email: 'customer@mundasense.zm', phone: '+260970000003', name: 'National Milling Corporation', role: 'customer', village: 'Lusaka', province: 'Lusaka' },
+      { email: 'transporter@mundasense.zm', phone: '+260970000005', name: 'ZamCargo Logistics', role: 'transporter', village: 'Chipata', province: 'Eastern' },
+    ];
 
-  console.log('[seed] Seeding database...');
-
-  // Demo role accounts (login via app with email or phone)
-  const demoAccounts = [
-    { email: 'admin@mundasense.zm', phone: '+260970000001', name: 'Dr. Joseph Banda', role: 'admin', village: 'Lusaka', province: 'Lusaka' },
-    { email: 'farmer@mundasense.zm', phone: '+260970000002', name: 'Chanda Mwape', role: 'farmer', village: 'Msekera', province: 'Eastern', ziamis_id: 'ZM-EAS-84001' },
-    { email: 'seller@mundasense.zm', phone: '+260970000004', name: 'Msekera Cooperative Union', role: 'seller', village: 'Msekera', province: 'Eastern' },
-    { email: 'customer@mundasense.zm', phone: '+260970000003', name: 'National Milling Corporation', role: 'customer', village: 'Lusaka', province: 'Lusaka' },
-    { email: 'transporter@mundasense.zm', phone: '+260970000005', name: 'ZamCargo Logistics', role: 'transporter', village: 'Chipata', province: 'Eastern' },
-  ];
-
-  for (const a of demoAccounts) {
-    db.prepare(`
-      INSERT INTO users (id, phone, email, full_name, role, village, province, language, pin_hash, ziamis_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'English', ?, ?)
-    `).run(
-      crypto.randomUUID(),
-      a.phone, a.email, a.name, a.role, a.village, a.province,
-      hashPin('demo1234'), a.ziamis_id || null
-    );
+    for (const a of demoAccounts) {
+      db.prepare(`
+        INSERT INTO users (id, phone, email, full_name, role, village, province, language, pin_hash, ziamis_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'English', ?, ?)
+      `).run(
+        crypto.randomUUID(),
+        a.phone, a.email, a.name, a.role, a.village, a.province,
+        hashPin('demo1234'), a.ziamis_id || null
+      );
+    }
   }
 
   // 108 farms across 3 provinces
@@ -77,15 +73,70 @@ export function seedDatabase() {
 
   // Marketplace listings
   const insertListing = db.prepare(`
-    INSERT INTO listings (seller_phone, crop, quantity_kg, price_per_kg_zmw, village, province, description)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO listings (seller_phone, seller_email, crop, quantity_kg, price_per_kg_zmw, village, province, description)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
-  insertListing.run('+260970000004', 'Maize', 30000, 6.20, 'Msekera', 'Eastern', 'Grade A white maize, moisture 12.6%');
-  insertListing.run('+260970000004', 'Groundnuts', 8000, 10.80, 'Msekera', 'Eastern', 'MGV4 confectionery grade');
-  insertListing.run('+260970000002', 'Maize', 1000, 6.40, 'Msekera', 'Eastern', 'Chanda Mwape farm lot');
-  insertListing.run('+260970000004', 'Soybeans', 15000, 8.50, 'Chongwe', 'Lusaka', 'Tikolore high-oil');
-  insertListing.run('+260970000004', 'Sunflower', 6000, 7.60, 'Mkushi', 'Central', 'Milika black seed');
+  const listings = [
+    { crop:'Maize',      qty:30000, price:6.20,  seller_phone:'+260970000004', seller_email:'seller@mundasense.zm', village:'Msekera',   province:'Eastern', desc:'Grade A white maize, moisture 12.6%' },
+    { crop:'Maize',      qty:22000, price:6.10,  seller_phone:'+260970000004', seller_email:'seller@mundasense.zm', village:'Kalongoma', province:'Eastern', desc:'Cleaned and bagged, certified aflatoxin-free' },
+    { crop:'Maize',      qty:1000,  price:6.40,  seller_phone:'+260970000002', seller_email:'farmer@mundasense.zm', village:'Msekera',   province:'Eastern', desc:'Harvested from Msekera plot #01' },
+    { crop:'Groundnuts', qty:8000,  price:10.80, seller_phone:'+260970000004', seller_email:'seller@mundasense.zm', village:'Chikuwe',   province:'Eastern', desc:'MGV4 confectionery, hand-sorted' },
+    { crop:'Soybeans',   qty:15000, price:8.50,  seller_phone:'+260970000004', seller_email:'seller@mundasense.zm', village:'Chongwe',   province:'Lusaka',  desc:'Tikolore high-oil' },
+    { crop:'Sunflower',  qty:6000,  price:7.60,  seller_phone:'+260970000004', seller_email:'seller@mundasense.zm', village:'Mkushi',    province:'Central', desc:'Milika black seed' },
+  ];
+
+  for (const l of listings) {
+    insertListing.run(l.seller_phone, l.seller_email, l.crop, l.qty, l.price, l.village, l.province, l.desc);
+  }
+
+  // Sensor Hubs & Readings
+  const hubsCount = (db.prepare('SELECT COUNT(*) as c FROM sensor_hubs').get() as any)?.c || 0;
+  if (hubsCount === 0) {
+    const insertHub = db.prepare(`
+      INSERT INTO sensor_hubs
+        (hub_code, name, province, district, latitude, longitude, coverage_radius_km, battery_voltage, solar_input_voltage, gsm_signal_dbm, uptime_h)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    const h1 = insertHub.run('HUB-EAST-01', 'Msekera Research Hub', 'Eastern', 'Chipata', -13.6333, 32.6500, 15, 4.14, 5.82, -74, 1420);
+    const h2 = insertHub.run('HUB-LUS-02', 'Chongwe Agricultural Hub', 'Lusaka', 'Chongwe', -15.3333, 28.6833, 18, 4.08, 5.75, -81, 980);
+    const h3 = insertHub.run('HUB-CEN-03', 'Mkushi Farming Block Hub', 'Central', 'Mkushi', -13.6167, 29.3833, 22, 4.18, 5.90, -69, 2150);
+
+    const insertReading = db.prepare(`
+      INSERT INTO sensor_readings
+        (hub_id, soil_moisture_15cm, soil_moisture_30cm, soil_moisture_60cm, temperature, humidity, rainfall, recorded_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now', ?))
+    `);
+
+    for (const hubId of [h1.lastInsertRowid, h2.lastInsertRowid, h3.lastInsertRowid]) {
+      for (let i = 48; i >= 0; i--) {
+        const offset = `-${i * 30} minutes`;
+        const m15 = +(26 + Math.sin(i / 4) * 5 + (Math.random() - 0.5) * 2).toFixed(1);
+        const m30 = +(29 + Math.sin(i / 5) * 4 + (Math.random() - 0.5) * 1.5).toFixed(1);
+        const m60 = +(34 + Math.sin(i / 6) * 3 + (Math.random() - 0.5) * 1).toFixed(1);
+        const temp = +(25 + Math.sin(i / 3) * 6).toFixed(1);
+        const hum = +(58 + Math.cos(i / 3) * 14).toFixed(1);
+        const rain = i === 12 ? 4.5 : i === 13 ? 2.1 : 0;
+        insertReading.run(hubId, m15, m30, m60, temp, hum, rain, offset);
+      }
+    }
+  }
+
+  // Storage Units
+  const silosCount = (db.prepare('SELECT COUNT(*) as c FROM storage_units').get() as any)?.c || 0;
+  if (silosCount === 0) {
+    const insertSilo = db.prepare(`
+      INSERT INTO storage_units
+        (name, crop, capacity_tons, current_fill_tons, moisture_percent, temp_c, co2_ppm, status, aflatoxin_risk)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    insertSilo.run('Chipata Central Silo #1', 'White Maize', 5000, 4120, 12.4, 23.5, 480, 'optimal', 'LOW');
+    insertSilo.run('Msekera Community Aggregator', 'Groundnuts', 1200, 980, 14.1, 27.2, 850, 'warning', 'MEDIUM');
+    insertSilo.run('Chongwe Depot Silo B', 'Soybeans', 3500, 2890, 11.8, 22.1, 410, 'optimal', 'LOW');
+    insertSilo.run('Mkushi Commercial Bin #4', 'White Maize', 8000, 7400, 15.2, 29.8, 1120, 'critical', 'HIGH');
+  }
 
   const totalUsers = (db.prepare('SELECT COUNT(*) as c FROM users').get() as any).c;
   const totalFarms = (db.prepare('SELECT COUNT(*) as c FROM farms').get() as any).c;

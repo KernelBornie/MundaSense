@@ -67,6 +67,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS listings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     seller_phone TEXT NOT NULL,
+    seller_email TEXT,
     crop TEXT NOT NULL,
     variety TEXT,
     grade TEXT,
@@ -137,11 +138,117 @@ db.exec(`
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
   );
 
+  CREATE TABLE IF NOT EXISTS sensor_hubs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    hub_code TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    province TEXT NOT NULL,
+    district TEXT NOT NULL,
+    latitude REAL NOT NULL,
+    longitude REAL NOT NULL,
+    coverage_radius_km REAL DEFAULT 15,
+    battery REAL DEFAULT 88,
+    battery_voltage REAL DEFAULT 4.12,
+    solar_v REAL DEFAULT 5.8,
+    solar_input_voltage REAL DEFAULT 5.8,
+    signal_dbm REAL DEFAULT -76,
+    gsm_signal_dbm REAL DEFAULT -76,
+    uptime_h REAL DEFAULT 720,
+    last_seen TEXT DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS sensor_readings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    hub_id INTEGER NOT NULL REFERENCES sensor_hubs(id),
+    soil_moisture_15cm REAL NOT NULL,
+    soil_moisture_30cm REAL NOT NULL,
+    soil_moisture_60cm REAL NOT NULL,
+    temperature REAL NOT NULL,
+    humidity REAL NOT NULL,
+    rainfall REAL DEFAULT 0,
+    recorded_at TEXT DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS storage_units (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    crop TEXT NOT NULL,
+    capacity_tons REAL NOT NULL,
+    current_fill_tons REAL NOT NULL,
+    moisture_percent REAL NOT NULL,
+    temp_c REAL NOT NULL,
+    co2_ppm REAL NOT NULL,
+    status TEXT DEFAULT 'optimal' CHECK (status IN ('optimal','warning','critical')),
+    aflatoxin_risk TEXT DEFAULT 'LOW' CHECK (aflatoxin_risk IN ('LOW','MEDIUM','HIGH')),
+    last_inspected TEXT DEFAULT CURRENT_TIMESTAMP
+  );
+
   CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone);
   CREATE INDEX IF NOT EXISTS idx_listings_seller ON listings(seller_phone);
   CREATE INDEX IF NOT EXISTS idx_farms_phone ON farms(farmer_phone);
   CREATE INDEX IF NOT EXISTS idx_sms_phone ON sms_log(phone);
+
+  CREATE TABLE IF NOT EXISTS crop_health_reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    farm_id INTEGER,
+    phone TEXT,
+    crop TEXT NOT NULL,
+    prediction TEXT NOT NULL,
+    pathogen TEXT,
+    confidence REAL NOT NULL,
+    severity TEXT,
+    risk TEXT,
+    symptoms TEXT,
+    recommendation TEXT,
+    prevention TEXT,
+    needs_review INTEGER DEFAULT 0,
+    stage TEXT,
+    spread_risk TEXT,
+    yield_impact TEXT,
+    treatment_priority TEXT,
+    treatment_reasoning TEXT,
+    treatment_plan_json TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_disease_phone ON crop_health_reports(phone);
+  CREATE INDEX IF NOT EXISTS idx_disease_created ON crop_health_reports(created_at);
 `);
+
+// Migration for existing databases
+try {
+  const cols = (db.prepare('PRAGMA table_info(crop_health_reports)').all() as any[]).map((c: any) => c.name);
+  const additions: [string, string][] = [
+    ['stage', 'TEXT'],
+    ['spread_risk', 'TEXT'],
+    ['yield_impact', 'TEXT'],
+    ['treatment_priority', 'TEXT'],
+    ['treatment_reasoning', 'TEXT'],
+    ['treatment_plan_json', 'TEXT'],
+  ];
+  for (const [name, type] of additions) {
+    if (!cols.includes(name)) {
+      db.exec(`ALTER TABLE crop_health_reports ADD COLUMN ${name} ${type}`);
+    }
+  }
+} catch (e) {
+  console.warn('[db] migration skipped:', e);
+}
+
+try {
+  const cols = (db.prepare('PRAGMA table_info(listings)').all() as any[]).map((c: any) => c.name);
+  if (!cols.includes('seller_phone'))
+    db.exec("ALTER TABLE listings ADD COLUMN seller_phone TEXT");
+  if (!cols.includes('seller_email'))
+    db.exec("ALTER TABLE listings ADD COLUMN seller_email TEXT");
+
+  db.exec(`
+    UPDATE listings SET seller_email = 'seller@mundasense.zm' WHERE (seller_email IS NULL OR seller_email = '') AND seller_phone = '+260970000004';
+    UPDATE listings SET seller_email = 'farmer@mundasense.zm' WHERE (seller_email IS NULL OR seller_email = '') AND seller_phone = '+260970000002';
+  `);
+} catch (e) {
+  console.warn('[db] migration skipped:', e);
+}
 
 /* ============================================================
    HELPERS
@@ -238,18 +345,42 @@ export function logSms(phone: string, direction: 'in' | 'out', message: string, 
   return info.lastInsertRowid;
 }
 
+/**
+ * Update the delivery status of an outbound SMS.
+ */
+export function updateSmsStatus(
+  id: number | bigint,
+  status: string,
+  providerId?: string
+) {
+  db.prepare(
+    'UPDATE sms_log SET status = ?, provider_id = COALESCE(?, provider_id) WHERE id = ?'
+  ).run(status, providerId || null, id);
+}
+
 /* ============================================================
    MARKETPLACE QUERIES
    ============================================================ */
 export function listActiveListings(crop?: string) {
-  const sql = crop
-    ? "SELECT * FROM listings WHERE status = 'available' AND crop = ? ORDER BY created_at DESC"
-    : "SELECT * FROM listings WHERE status = 'available' ORDER BY created_at DESC";
+  const sql = `
+    SELECT l.*,
+      u.full_name AS seller_name,
+      u.phone     AS seller_phone,
+      u.email     AS seller_email,
+      u.village   AS seller_village,
+      u.province  AS seller_province
+    FROM listings l
+    LEFT JOIN users u ON u.phone = l.seller_phone
+    WHERE l.status = 'available'
+    ${crop ? 'AND l.crop = ?' : ''}
+    ORDER BY l.created_at DESC
+  `;
   return crop ? (db.prepare(sql).all(crop) as any[]) : (db.prepare(sql).all() as any[]);
 }
 
 export function createListing(l: {
   seller_phone: string;
+  seller_email?: string;
   crop: string;
   quantity_kg: number;
   price_per_kg_zmw: number;
@@ -258,9 +389,15 @@ export function createListing(l: {
   description?: string;
 }) {
   const info = db.prepare(`
-    INSERT INTO listings (seller_phone, crop, quantity_kg, price_per_kg_zmw, village, province, description)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(l.seller_phone, l.crop, l.quantity_kg, l.price_per_kg_zmw, l.village || null, l.province || null, l.description || null);
+    INSERT INTO listings
+      (seller_phone, seller_email, crop, quantity_kg,
+       price_per_kg_zmw, village, province, description)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    l.seller_phone, l.seller_email || null, l.crop,
+    l.quantity_kg, l.price_per_kg_zmw,
+    l.village || null, l.province || null, l.description || null
+  );
   return db.prepare('SELECT * FROM listings WHERE id = ?').get(info.lastInsertRowid as any);
 }
 
@@ -278,4 +415,68 @@ export function getMarketPrices() {
     GROUP BY crop ORDER BY crop
   `).all() as any[];
   return rows.map((r) => ({ crop: r.crop, price: +Number(r.price).toFixed(2), listings: Number(r.listings) }));
+}
+
+export interface DiseaseReportInput {
+  farm_id?: number;
+  phone?: string;
+  crop: string;
+  prediction: string;
+  pathogen?: string;
+  confidence: number;
+  severity?: string;
+  risk?: string;
+  symptoms?: string;
+  recommendation?: string;
+  prevention?: string;
+  needs_review?: number;
+  stage?: string;
+  spread_risk?: string;
+  yield_impact?: string;
+  treatment_priority?: string;
+  treatment_reasoning?: string;
+  treatment_plan_json?: string;
+}
+
+export function saveDiseaseReport(input: DiseaseReportInput): number {
+  const info = db.prepare(`
+    INSERT INTO crop_health_reports
+      (farm_id, phone, crop, prediction, pathogen, confidence,
+       severity, risk, symptoms, recommendation, prevention, needs_review,
+       stage, spread_risk, yield_impact, treatment_priority,
+       treatment_reasoning, treatment_plan_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    input.farm_id ?? null,
+    input.phone ?? null,
+    input.crop,
+    input.prediction,
+    input.pathogen ?? null,
+    input.confidence,
+    input.severity ?? null,
+    input.risk ?? null,
+    input.symptoms ?? null,
+    input.recommendation ?? null,
+    input.prevention ?? null,
+    input.needs_review ?? 0,
+    input.stage ?? null,
+    input.spread_risk ?? null,
+    input.yield_impact ?? null,
+    input.treatment_priority ?? null,
+    input.treatment_reasoning ?? null,
+    input.treatment_plan_json ?? null
+  );
+  return Number(info.lastInsertRowid);
+}
+
+export function listDiseaseReports(limit = 50) {
+  return db.prepare(
+    'SELECT * FROM crop_health_reports ORDER BY created_at DESC LIMIT ?'
+  ).all(limit);
+}
+
+export function listDiseaseReportsForPhone(phone: string, limit = 20) {
+  return db.prepare(
+    'SELECT * FROM crop_health_reports WHERE phone = ? ORDER BY created_at DESC LIMIT ?'
+  ).all(phone, limit);
 }

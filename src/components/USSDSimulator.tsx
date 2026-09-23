@@ -17,7 +17,7 @@ function beep() {
 }
 
 export function USSDSimulator() {
-  const [phone, setPhone] = useState('+260970000099');
+  const [phone, setPhone] = useState('+260974684713');
   const [buffer, setBuffer] = useState('*2873#');
   const [screenText, setScreenText] = useState(
     'MundaSense Feature Phone\n\nReady.\n\nDial *2873#'
@@ -67,7 +67,6 @@ export function USSDSimulator() {
       setIsActive(!isEnd);
       setTrace((t) => [...t, { input: accumulatedPath || '(dial)', output: cleaned, raw }]);
 
-      // Auth state tracking
       if (raw.includes('Enter your 4-digit PIN')) {
         setIsAuthenticated(false);
       }
@@ -83,7 +82,6 @@ export function USSDSimulator() {
         setIsAuthenticated(true);
       }
 
-      // PIN capture
       if (raw.includes('Your PIN is:')) {
         const m = raw.match(/Your PIN is:\s*(\d{4})/);
         if (m) setRegisteredPin(m[1]);
@@ -150,7 +148,6 @@ export function USSDSimulator() {
 
   return (
     <div className="flex flex-col xl:flex-row items-start justify-center gap-8">
-      {/* ============== FEATURE PHONE ============== */}
       <div className="w-[320px] flex-shrink-0">
         <div className="bg-gradient-to-b from-[#2a2f2c] to-[#1a1e1c] border-4 border-[#101411] rounded-[46px] p-5 shadow-2xl shadow-black/80">
           <div className="flex justify-center mb-3">
@@ -251,7 +248,6 @@ export function USSDSimulator() {
         </div>
       </div>
 
-      {/* ============== PANEL ============== */}
       <div className="flex-1 max-w-lg space-y-4">
         <div className="bg-[#101b13] border border-[#1e3623] rounded-2xl p-5 shadow-xl space-y-4">
           <div>
@@ -278,7 +274,7 @@ export function USSDSimulator() {
               className="w-full px-3 py-2.5 bg-[#152418] border border-[#233f28] rounded-lg text-sm text-emerald-300 font-mono focus:outline-none focus:border-emerald-500"
             />
             <p className="text-[10px] text-gray-500 mt-1">
-              Change to register a new farmer or login an existing one.
+              Currently set to <strong className="text-emerald-400">+260974684713</strong> — your registered MTN number.
             </p>
           </div>
 
@@ -313,8 +309,8 @@ export function USSDSimulator() {
                   Account created in SQLite
                 </div>
                 <p className="text-emerald-200 mb-2">
-                  Log in on the web app with this phone + PIN, OR dial *2873# again to
-                  enter the PIN.
+                  Log in on the web app with <strong>+260974684713</strong> + this PIN,
+                  OR dial *2873# again to enter the PIN.
                 </p>
                 <div className="inline-block bg-black/40 border border-emerald-700 px-3 py-1.5 rounded-lg font-mono text-base text-emerald-300 font-bold">
                   PIN: {registeredPin}
