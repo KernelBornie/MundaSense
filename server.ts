@@ -3,6 +3,8 @@ import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
 import path from 'path';
 import crypto from 'crypto';
+import { fileURLToPath } from 'url';
+import { existsSync } from 'fs';
 
 import {
   findUserByPhone,
@@ -33,24 +35,42 @@ import { transportRouter } from './server/transport.ts';
 
 dotenv.config();
 
-/* Boot: seed DB if empty */
-seedDatabase();
-seedDepotsIfEmpty();
-const lukuluBootCount = (db.prepare("SELECT COUNT(*) as c FROM depots WHERE district = 'Lukulu'").get() as any)?.c || 0;
-console.log(`[boot] Lukulu depots: ${lukuluBootCount}`);
-if (lukuluBootCount === 0) {
-  console.warn('[boot] ⚠️  Lukulu depots missing. Forcing reseed...');
+/* ============================================================
+   PATH RESOLUTION — works on Render regardless of CWD
+   ============================================================ */
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const DIST_PATH = path.join(__dirname, 'dist');
+
+/* ============================================================
+   BOOT: seed DB + depots if empty
+   ============================================================ */
+try {
+  seedDatabase();
   seedDepotsIfEmpty();
+
+  const lukuluBootCount =
+    (db.prepare("SELECT COUNT(*) as c FROM depots WHERE district = 'Lukulu'").get() as any)?.c || 0;
+  console.log(`[boot] Lukulu depots: ${lukuluBootCount}`);
+
+  if (lukuluBootCount === 0) {
+    console.warn('[boot] ⚠️  Lukulu depots missing. Forcing reseed...');
+    seedDepotsIfEmpty();
+  }
+} catch (e: any) {
+  console.error('[boot] Seed error (continuing):', e.message);
 }
 
 const app = express();
-const PORT = 3000;
 
+/* ============================================================
+   MIDDLEWARE
+   ============================================================ */
 app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ extended: true, limit: '25mb' }));
 
 /* ============================================================
-   SESSION TOKENS (JWT-style, in-memory for now)
+   SESSION TOKENS (JWT-style, in-memory)
    ============================================================ */
 const sessions: Map<string, { user_id: string; expires: number }> = new Map();
 
@@ -95,6 +115,49 @@ const publicUser = (u: any) => ({
 });
 
 /* ============================================================
+   HEALTH CHECK — placed early so it always responds
+   ============================================================ */
+app.get('/api/health', (_req: Request, res: Response) => {
+  try {
+    const usersCount = (db.prepare('SELECT COUNT(*) as c FROM users').get() as any)?.c || 0;
+    const farmsCount = (db.prepare('SELECT COUNT(*) as c FROM farms').get() as any)?.c || 0;
+    const districtCount =
+      (db.prepare('SELECT COUNT(DISTINCT district) as c FROM farms').get() as any)?.c || 0;
+    const provincesCount =
+      (db.prepare('SELECT COUNT(DISTINCT province) as c FROM farms').get() as any)?.c || 0;
+    const hubsCount = (db.prepare('SELECT COUNT(*) as c FROM sensor_hubs').get() as any)?.c || 0;
+    const listingsCount =
+      (db.prepare("SELECT COUNT(*) as c FROM listings WHERE status = 'available'").get() as any)?.c || 0;
+    const depotsCount = (db.prepare('SELECT COUNT(*) as c FROM depots').get() as any)?.c || 0;
+    const reportsCount =
+      (db.prepare('SELECT COUNT(*) as c FROM crop_health_reports').get() as any)?.c || 0;
+
+    res.json({
+      status: 'ok',
+      service: 'MundaSense Platform',
+      version: '3.0.0',
+      database: 'sqlite',
+      farm_count: farmsCount,
+      farms_in_db: farmsCount,
+      district_count: districtCount,
+      provinces_covered: provincesCount,
+      hubs_online: hubsCount,
+      users_registered: usersCount,
+      active_listings: listingsCount,
+      depots_total: depotsCount,
+      disease_reports: reportsCount,
+      gemini_enabled: geminiStatus().enabled,
+      gemini_model: geminiStatus().model,
+      ussd_shortcode: '*2873#',
+      ussd_endpoint: "/ussd (Africa's Talking compatible)",
+      at_sms_configured: Boolean(process.env.AT_API_KEY),
+    });
+  } catch (e: any) {
+    res.status(500).json({ status: 'error', error: e.message });
+  }
+});
+
+/* ============================================================
    AUTH ENDPOINTS
    ============================================================ */
 app.post('/api/auth/register', (req: Request, res: Response) => {
@@ -122,14 +185,18 @@ app.post('/api/auth/register', (req: Request, res: Response) => {
 
 app.post('/api/auth/login', (req: Request, res: Response) => {
   const { identifier, password } = req.body;
-  if (!identifier || !password) return res.status(400).json({ error: 'identifier and password required' });
+  if (!identifier || !password) {
+    return res.status(400).json({ error: 'identifier and password required' });
+  }
 
   const user = identifier.includes('@')
     ? findUserByEmail(identifier)
     : findUserByPhone(identifier);
 
   if (!user || !user.is_active) return res.status(401).json({ error: 'invalid credentials' });
-  if (!verifyPin(password, user.pin_hash)) return res.status(401).json({ error: 'invalid credentials' });
+  if (!verifyPin(password, user.pin_hash)) {
+    return res.status(401).json({ error: 'invalid credentials' });
+  }
 
   const token = issueToken(user.id);
   res.json({ token, user: publicUser(user) });
@@ -146,27 +213,24 @@ app.post('/api/auth/logout', requireAuth, (req: Request, res: Response) => {
 });
 
 /* ============================================================
-   USSD — Real Africa's Talking webhook + test endpoint
+   USSD — Africa's Talking webhook
    ============================================================ */
 app.post('/ussd', handleUssd);
 app.post('/api/ussd', handleUssd);
 app.post('/api/ussd/simulate', handleUssd);
 
 app.get('/api/ussd/sessions', (_req: Request, res: Response) => {
-  const rows = db.prepare(
-    'SELECT * FROM ussd_sessions WHERE expires_at > CURRENT_TIMESTAMP ORDER BY created_at DESC LIMIT 20'
-  ).all();
+  const rows = db
+    .prepare(
+      'SELECT * FROM ussd_sessions WHERE expires_at > CURRENT_TIMESTAMP ORDER BY created_at DESC LIMIT 20'
+    )
+    .all();
   res.json(rows);
 });
 
 /* ============================================================
-   SMS — Real Africa's Talking integration
+   SMS — Africa's Talking integration
    ============================================================ */
-
-/**
- * Inbound SMS webhook (called by Africa's Talking).
- * AT POSTs form-encoded with fields: from, to, text, date, id, linkId
- */
 app.post('/sms/webhook', async (req: Request, res: Response) => {
   const from = String(req.body.from || req.body.from_ || req.body.sender || '').trim();
   const to = String(req.body.to || req.body.recipient || '');
@@ -180,7 +244,6 @@ app.post('/sms/webhook', async (req: Request, res: Response) => {
     return res.status(400).type('text/plain').send('Missing from or text');
   }
 
-  // Log inbound message
   db.prepare(
     "INSERT INTO sms_log (phone, direction, message, provider, provider_id, status) VALUES (?, 'in', ?, 'africastalking', ?, 'received')"
   ).run(from, text, messageId);
@@ -190,7 +253,6 @@ app.post('/sms/webhook', async (req: Request, res: Response) => {
   let reply = 'MundaSense: Reply HELP for options.';
 
   try {
-    // SOIL — live soil moisture for the farmer's farm
     if (cmd === 'SOIL') {
       const farm: any = db
         .prepare('SELECT * FROM farms WHERE farmer_phone = ? LIMIT 1')
@@ -198,90 +260,59 @@ app.post('/sms/webhook', async (req: Request, res: Response) => {
       reply = farm
         ? `MundaSense: Soil moisture @30cm is ${Number(farm.soil_moisture).toFixed(1)}%. Crop: ${farm.crop}. Health: ${farm.health_status}.`
         : 'MundaSense: No farm registered to this number. Dial *384*2873# to register.';
-    }
-
-    // PRICE <crop> — market price query
-    else if (cmd === 'PRICE') {
+    } else if (cmd === 'PRICE') {
       const prices = getMarketPrices();
       if (arg) {
-        const hit = prices.find((p) => p.crop.toUpperCase() === arg);
+        const hit = prices.find((p: any) => p.crop.toUpperCase() === arg);
         reply = hit
           ? `MundaSense: ${hit.crop} is ZMW ${hit.price}/kg (${hit.listings} listings).`
-          : `MundaSense: No listings for ${arg}. Available: ${prices.map((p) => p.crop).join(', ')}`;
+          : `MundaSense: No listings for ${arg}. Available: ${prices.map((p: any) => p.crop).join(', ')}`;
       } else {
         reply =
           'MundaSense Prices (ZMW/kg): ' +
-          prices.map((p) => `${p.crop} ${p.price}`).join(', ');
+          prices.map((p: any) => `${p.crop} ${p.price}`).join(', ');
       }
-    }
-
-    // YES <id> — confirm order
-    else if (cmd === 'YES' && arg) {
+    } else if (cmd === 'YES' && arg) {
       const orderId = parseInt(arg, 10);
-      const order: any = db
-        .prepare('SELECT * FROM orders WHERE id = ?')
-        .get(orderId);
+      const order: any = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId);
       if (order) {
         db.prepare("UPDATE orders SET status = 'confirmed' WHERE id = ?").run(orderId);
         reply = `MundaSense: Order #${orderId} CONFIRMED. Total ZMW ${order.total_zmw}. Transport can now be arranged.`;
       } else {
         reply = `MundaSense: Order #${orderId} not found.`;
       }
-    }
-
-    // NO <id> — decline order
-    else if (cmd === 'NO' && arg) {
+    } else if (cmd === 'NO' && arg) {
       const orderId = parseInt(arg, 10);
-      const order: any = db
-        .prepare('SELECT * FROM orders WHERE id = ?')
-        .get(orderId);
+      const order: any = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId);
       if (order) {
         db.prepare("UPDATE orders SET status = 'cancelled' WHERE id = ?").run(orderId);
-        db.prepare("UPDATE listings SET status = 'available' WHERE id = ?").run(
-          order.listing_id
-        );
+        db.prepare("UPDATE listings SET status = 'available' WHERE id = ?").run(order.listing_id);
         reply = `MundaSense: Order #${orderId} declined. Listing restored.`;
       } else {
         reply = `MundaSense: Order #${orderId} not found.`;
       }
-    }
-
-    // TRACK <id> — transport status
-    else if (cmd === 'TRACK' && arg) {
+    } else if (cmd === 'TRACK' && arg) {
       const reqId = parseInt(arg, 10);
-      const tr: any = db
-        .prepare('SELECT * FROM transport_requests WHERE id = ?')
-        .get(reqId);
+      const tr: any = db.prepare('SELECT * FROM transport_requests WHERE id = ?').get(reqId);
       reply = tr
         ? `MundaSense: TR-${tr.id} is ${tr.status}. ${tr.pickup_location} → ${tr.dropoff_location}.`
         : `MundaSense: Transport request TR-${arg} not found.`;
-    }
-
-    // BULK — join Friday cooperative sale
-    else if (cmd === 'BULK') {
+    } else if (cmd === 'BULK') {
       db.prepare(
         "INSERT INTO advisories (farm_phone, channel, category, message) VALUES (?, 'SMS', 'Market', 'Joined Friday bulk sale')"
       ).run(from);
       reply =
         'MundaSense: You are registered for Friday bulk sale at Msekera Depot. Bring moisture-tested bags by 09:00.';
-    }
-
-    // HELP — command list
-    else if (cmd === 'HELP') {
+    } else if (cmd === 'HELP') {
       reply =
         'MundaSense Commands:\nSOIL - soil moisture\nPRICE <crop> - market price\nYES <id> - confirm order\nNO <id> - decline order\nTRACK <id> - transport status\nBULK - join Friday sale\nHELP - this list';
-    }
-
-    // Unknown — guide to USSD
-    else {
+    } else {
       reply = `MundaSense: Unknown command "${text.slice(0, 20)}". Reply HELP for commands or dial *384*2873#.`;
     }
 
-    // Send reply via real SMS
     const sendResult = await sendSms(from, reply);
     console.log(`[SMS-OUT] to=${from} status=${sendResult.status}`);
 
-    // Return reply to AT (used for outbound webhook config)
     res.type('text/plain').send(reply);
   } catch (e: any) {
     console.error('[SMS webhook error]', e);
@@ -289,9 +320,6 @@ app.post('/sms/webhook', async (req: Request, res: Response) => {
   }
 });
 
-/**
- * Send a test SMS on demand (for admin / demo).
- */
 app.post('/api/sms/send', requireAuth, async (req: Request, res: Response) => {
   const { to, message } = req.body;
   if (!to || !message) {
@@ -301,20 +329,15 @@ app.post('/api/sms/send', requireAuth, async (req: Request, res: Response) => {
   res.json(result);
 });
 
-/**
- * Send bulk SMS campaign (admin only).
- */
 app.post('/api/sms/bulk', requireAuth, async (req: Request, res: Response) => {
   const { message, phones, province, crop } = req.body;
   if (!message) return res.status(400).json({ error: 'message required' });
 
-  // Build recipient list
   let recipients: string[] = [];
 
   if (Array.isArray(phones) && phones.length) {
     recipients = phones;
   } else {
-    // Query farms by province/crop
     let sql = 'SELECT DISTINCT farmer_phone FROM farms WHERE 1=1';
     const params: any[] = [];
     if (province) {
@@ -337,9 +360,6 @@ app.post('/api/sms/bulk', requireAuth, async (req: Request, res: Response) => {
   res.json(summary);
 });
 
-/**
- * Read SMS log for a phone (used by simulator UI).
- */
 app.get('/api/sms/log', (req: Request, res: Response) => {
   const phone = String(req.query.phone || '').trim();
   if (!phone) return res.status(400).json({ error: 'phone required' });
@@ -351,22 +371,14 @@ app.get('/api/sms/log', (req: Request, res: Response) => {
   res.json((rows as any[]).reverse());
 });
 
-/**
- * SMS account balance.
- */
 app.get('/api/sms/balance', requireAuth, async (_req: Request, res: Response) => {
   const balance = await getAccountBalance();
   res.json(balance);
 });
 
-/**
- * Recent SMS deliveries (for monitoring).
- */
 app.get('/api/sms/recent', requireAuth, (_req: Request, res: Response) => {
   const rows = db
-    .prepare(
-      "SELECT * FROM sms_log WHERE direction = 'out' ORDER BY id DESC LIMIT 30"
-    )
+    .prepare("SELECT * FROM sms_log WHERE direction = 'out' ORDER BY id DESC LIMIT 30")
     .all();
   res.json(rows);
 });
@@ -389,9 +401,24 @@ interface SensorState {
 }
 
 const hubState: Record<number, SensorState> = {
-  1: { hub_id: 1, soil_15: 24.5, soil_30: 28.8, soil_60: 33.2, temperature: 21.9, humidity: 78, rainfall: 0, battery_v: 13.2, solar_v: 5.8, signal_dbm: -88, timestamp: new Date().toISOString() },
-  2: { hub_id: 2, soil_15: 26.1, soil_30: 30.2, soil_60: 35.8, temperature: 23.4, humidity: 71, rainfall: 0, battery_v: 12.8, solar_v: 6.1, signal_dbm: -92, timestamp: new Date().toISOString() },
-  3: { hub_id: 3, soil_15: 22.8, soil_30: 27.4, soil_60: 31.9, temperature: 24.8, humidity: 65, rainfall: 0, battery_v: 13.5, solar_v: 6.3, signal_dbm: -84, timestamp: new Date().toISOString() },
+  1: {
+    hub_id: 1, soil_15: 24.5, soil_30: 28.8, soil_60: 33.2,
+    temperature: 21.9, humidity: 78, rainfall: 0,
+    battery_v: 13.2, solar_v: 5.8, signal_dbm: -88,
+    timestamp: new Date().toISOString(),
+  },
+  2: {
+    hub_id: 2, soil_15: 26.1, soil_30: 30.2, soil_60: 35.8,
+    temperature: 23.4, humidity: 71, rainfall: 0,
+    battery_v: 12.8, solar_v: 6.1, signal_dbm: -92,
+    timestamp: new Date().toISOString(),
+  },
+  3: {
+    hub_id: 3, soil_15: 22.8, soil_30: 27.4, soil_60: 31.9,
+    temperature: 24.8, humidity: 65, rainfall: 0,
+    battery_v: 13.5, solar_v: 6.3, signal_dbm: -84,
+    timestamp: new Date().toISOString(),
+  },
 };
 
 function updateSensors() {
@@ -399,7 +426,9 @@ function updateSensors() {
   for (const s of Object.values(hubState)) {
     const dailyTemp = 22 + 8 * Math.sin(((hour - 9) * Math.PI) / 12);
     s.temperature = +(dailyTemp + (Math.random() - 0.5) * 0.6).toFixed(1);
-    s.humidity = Math.round(Math.max(30, Math.min(95, 92 - (s.temperature - 15) * 1.8 + (Math.random() - 0.5) * 4)));
+    s.humidity = Math.round(
+      Math.max(30, Math.min(95, 92 - (s.temperature - 15) * 1.8 + (Math.random() - 0.5) * 4))
+    );
 
     const isRaining = Math.random() < 0.05;
     s.rainfall = isRaining ? +(Math.random() * 8).toFixed(1) : 0;
@@ -421,7 +450,9 @@ function updateSensors() {
 
     const isDaylight = hour > 6 && hour < 18;
     s.solar_v = isDaylight ? +(5.5 + Math.random() * 1.2).toFixed(2) : 0;
-    s.battery_v = isDaylight ? Math.min(13.6, s.battery_v + 0.02) : Math.max(11.5, s.battery_v - 0.03);
+    s.battery_v = isDaylight
+      ? Math.min(13.6, s.battery_v + 0.02)
+      : Math.max(11.5, s.battery_v - 0.03);
     s.timestamp = new Date().toISOString();
   }
 }
@@ -437,7 +468,9 @@ app.get('/api/live/stream', (req: Request, res: Response) => {
   });
   res.flushHeaders();
   sseClients.add(res);
-  res.write(`data: ${JSON.stringify({ type: 'snapshot', hubs: Object.values(hubState) })}\n\n`);
+  res.write(
+    `data: ${JSON.stringify({ type: 'snapshot', hubs: Object.values(hubState) })}\n\n`
+  );
   req.on('close', () => sseClients.delete(res));
 });
 
@@ -468,7 +501,6 @@ interface TrackingPoint {
 
 const transportRoutes: Map<number, TrackingPoint[]> = new Map();
 
-// Seed active route (Msekera → Lusaka along Great East Road)
 transportRoutes.set(42, [
   { lat: -13.6333, lng: 32.65, speed_kmh: 55, timestamp: new Date(Date.now() - 3600000).toISOString() },
   { lat: -13.85, lng: 32.45, speed_kmh: 62, timestamp: new Date(Date.now() - 3000000).toISOString() },
@@ -479,7 +511,6 @@ transportRoutes.set(42, [
   { lat: -15.3333, lng: 28.6833, speed_kmh: 45, timestamp: new Date().toISOString() },
 ]);
 
-// Auto-advance truck every 10s
 setInterval(() => {
   const route = transportRoutes.get(42);
   if (!route) return;
@@ -539,7 +570,7 @@ app.use('/api', depotsRouter);
 app.use('/api', farmsRouter);
 
 /* ============================================================
-   DISEASE SCREENING (REAL GEMINI 2.5 FLASH VISION + SQLITE)
+   DISEASE SCREENING (REAL GEMINI 2.5 FLASH VISION)
    ============================================================ */
 app.post('/api/disease/analyze', async (req: Request, res: Response) => {
   const {
@@ -601,62 +632,63 @@ app.get('/api/disease/status', (_req: Request, res: Response) => {
 });
 
 app.get('/api/disease/treatment/:diseaseName', (req: Request, res: Response) => {
-  import('./server/treatmentDatabase.ts').then(({ getTreatmentPlan, estimateTreatmentCost }) => {
-    const disease = decodeURIComponent(req.params.diseaseName);
-    const plan = getTreatmentPlan(disease);
-    const cost = estimateTreatmentCost(disease, Number(req.query.hectares) || 1);
-    res.json({ plan, cost });
-  }).catch((e) => {
-    res.status(500).json({ error: 'Treatment lookup failed', detail: e.message });
-  });
+  import('./server/treatmentDatabase.ts')
+    .then(({ getTreatmentPlan, estimateTreatmentCost }) => {
+      const disease = decodeURIComponent(req.params.diseaseName);
+      const plan = getTreatmentPlan(disease);
+      const cost = estimateTreatmentCost(disease, Number(req.query.hectares) || 1);
+      res.json({ plan, cost });
+    })
+    .catch((e) => {
+      res.status(500).json({ error: 'Treatment lookup failed', detail: e.message });
+    });
 });
 
 /* ============================================================
-   HEALTH CHECK
-   ============================================================ */
-app.get('/api/health', (_req: Request, res: Response) => {
-  const usersCount = (db.prepare('SELECT COUNT(*) as c FROM users').get() as any)?.c || 0;
-  const farmsCount = (db.prepare('SELECT COUNT(*) as c FROM farms').get() as any)?.c || 0;
-  const districtCount = (db.prepare('SELECT COUNT(DISTINCT district) as c FROM farms').get() as any)?.c || 0;
-  const provincesCount = (db.prepare('SELECT COUNT(DISTINCT province) as c FROM farms').get() as any)?.c || 0;
-  const hubsCount = (db.prepare('SELECT COUNT(*) as c FROM sensor_hubs').get() as any)?.c || 0;
-  const listingsCount = (db.prepare("SELECT COUNT(*) as c FROM listings WHERE status = 'available'").get() as any)?.c || 0;
-  const depotsCount = (db.prepare('SELECT COUNT(*) as c FROM depots').get() as any)?.c || 0;
-
-  res.json({
-    status: 'ok',
-    service: 'MundaSense Platform',
-    version: '3.0.0',
-    database: 'sqlite',
-    farm_count: farmsCount,
-    farms_in_db: farmsCount,
-    district_count: districtCount,
-    provinces_covered: provincesCount,
-    hubs_online: hubsCount,
-    users_registered: usersCount,
-    active_listings: listingsCount,
-    depots_total: depotsCount,
-    gemini_enabled: geminiStatus().enabled,
-    gemini_model: geminiStatus().model,
-    disease_reports: (db.prepare('SELECT COUNT(*) as c FROM crop_health_reports').get() as any)?.c || 0,
-    ussd_shortcode: '*2873#',
-    ussd_endpoint: '/ussd (Africa\'s Talking compatible)',
-    at_sms_configured: Boolean(process.env.AT_API_KEY),
-  });
-});
-
-/* ============================================================
-   MOUNT VITE MIDDLEWARE IN DEVELOPMENT / STATIC IN PROD
+   MOUNT VITE MIDDLEWARE (DEV) / STATIC (PROD)
    ============================================================ */
 async function startServer() {
   const isProd = process.env.NODE_ENV === 'production';
+
   if (!isProd) {
-    const vite = await createViteServer({ server: { middlewareMode: true }, appType: 'spa' });
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: 'spa',
+    });
     app.use(vite.middlewares);
   } else {
-    app.use(express.static(path.resolve('dist')));
-    app.get('*', (_req: Request, res: Response) => res.sendFile(path.resolve('dist/index.html')));
+    console.log(`[serve] Production mode — serving static files from: ${DIST_PATH}`);
+
+    if (!existsSync(DIST_PATH)) {
+      console.error(`[serve] ❌ DIST folder NOT FOUND at ${DIST_PATH}`);
+      console.error('[serve] Run `npm run build` before starting the server.');
+    } else {
+      console.log(`[serve] ✅ DIST folder found`);
+    }
+
+    app.use(express.static(DIST_PATH));
+
+    // SPA fallback — serves index.html for any non-API route
+    app.get('*', (req: Request, res: Response) => {
+      if (
+        req.path.startsWith('/api') ||
+        req.path.startsWith('/uploads') ||
+        req.path.startsWith('/ussd') ||
+        req.path.startsWith('/sms') ||
+        req.path.startsWith('/health')
+      ) {
+        return res.status(404).json({ error: 'not found' });
+      }
+
+      const indexPath = path.join(DIST_PATH, 'index.html');
+      if (!existsSync(indexPath)) {
+        return res.status(500).send('Frontend not built. Run npm run build.');
+      }
+      res.sendFile(indexPath);
+    });
   }
+
+  const PORT = Number(process.env.PORT) || 3000;
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`🌾 MundaSense v3 running on http://0.0.0.0:${PORT}`);
@@ -664,8 +696,13 @@ async function startServer() {
     console.log(`💾 SQLite DB: data/mundasense.db`);
     console.log(`📡 Live SSE stream at /api/live/stream`);
     console.log(`🚚 Transport tracking at /api/transport/:id/track`);
-    console.log(`🤖 Gemini: ${geminiStatus().enabled ? `ENABLED (${geminiStatus().model})` : 'OFFLINE'}`);
-    console.log(`📱 SMS: ${process.env.AT_API_KEY ? 'LIVE (Africa\'s Talking)' : 'log-only'}`);
+    console.log(
+      `🤖 Gemini: ${geminiStatus().enabled ? `ENABLED (${geminiStatus().model})` : 'OFFLINE'}`
+    );
+    console.log(
+      `📱 SMS: ${process.env.AT_API_KEY ? "LIVE (Africa's Talking)" : 'log-only'}`
+    );
+    console.log(`📁 Static files: ${isProd ? DIST_PATH : 'Vite dev middleware'}`);
   });
 }
 
