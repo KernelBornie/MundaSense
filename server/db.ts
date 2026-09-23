@@ -496,32 +496,56 @@ reloadAllIntoCache();
 /* ============================================================
    MONGODB ATLAS INTEGRATION
    ============================================================ */
+export let client: MongoClient | null = null;
 export let mongoClient: MongoClient | null = null;
 export let mongoDb: Db | null = null;
 
 export async function connectMongo(): Promise<Db | null> {
-  const uri = process.env.MONGODB_URI;
-  const dbName = process.env.MONGODB_DB_NAME || 'mundasense';
+  if (mongoDb) return mongoDb;
+  const MONGODB_URI = process.env.MONGODB_URI;
+  const DB_NAME = process.env.MONGODB_DB_NAME || 'mundasense';
 
-  if (!uri) {
-    console.warn(`[db] ⚠️  MONGODB_URI not configured — operating in hybrid in-memory store`);
+  if (!MONGODB_URI) {
+    console.warn('[db] ⚠️  MONGODB_URI not set — using in-memory only');
     return null;
   }
 
-  try {
-    const client = new MongoClient(uri, {
-      serverSelectionTimeoutMS: 5000,
-      connectTimeoutMS: 5000,
-    });
-    await client.connect();
-    mongoClient = client;
-    mongoDb = client.db(dbName);
-    console.log(`[db] ✅ MongoDB connected — ${dbName}`);
-    return mongoDb;
-  } catch (err: any) {
-    console.error(`[db] ❌ MongoDB connection error: ${err.message}`);
-    return null;
+  // Sanitize for logging
+  const sanitized = MONGODB_URI.replace(/:\/\/([^:]+):([^@]+)@/, '://$1:***@');
+  console.log('[db] Connecting to:', sanitized);
+
+  // Build candidate URIs: as-is, then with authSource=admin
+  const candidates: string[] = [MONGODB_URI];
+  if (!MONGODB_URI.includes('authSource=')) {
+    const withAuth = MONGODB_URI.includes('?')
+      ? MONGODB_URI + '&authSource=admin'
+      : MONGODB_URI + '?authSource=admin';
+    candidates.push(withAuth);
   }
+
+  for (let i = 0; i < candidates.length; i++) {
+    const uri = candidates[i];
+    try {
+      const testClient = new MongoClient(uri, { serverSelectionTimeoutMS: 8000 });
+      await testClient.connect();
+      // Ping to confirm auth works
+      await testClient.db(DB_NAME).command({ ping: 1 });
+      client = testClient;
+      mongoClient = testClient;
+      mongoDb = testClient.db(DB_NAME);
+      console.log(`[db] ✅ MongoDB connected — ${DB_NAME} (attempt ${i + 1})`);
+      return mongoDb;
+    } catch (e: any) {
+      console.warn(`[db] Attempt ${i + 1} failed: ${e.message}`);
+      if (i === candidates.length - 1) {
+        console.error('[db] ❌ All connection attempts failed — using in-memory only');
+        console.error('[db] Hint: verify MONGODB_URI credentials and IP allowlist (0.0.0.0/0)');
+        return null;
+      }
+    }
+  }
+
+  return null;
 }
 
 export async function hydrate(): Promise<void> {
