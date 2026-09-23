@@ -1,6 +1,8 @@
 import React, { useState, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { Farm, Province, HealthStatus } from '../types';
+import { GoogleFarmMap } from './GoogleFarmMap';
+import { useLiveFarmData } from '../hooks/useLiveFarmData';
 import {
   MapPin,
   Radio,
@@ -13,6 +15,7 @@ import {
   Send,
   Camera,
   X,
+  Globe,
 } from 'lucide-react';
 
 interface FarmMapProps {
@@ -34,9 +37,18 @@ export const FarmMap: React.FC<FarmMapProps> = ({ onScreenFarm }) => {
     sendInboundSMS,
   } = useApp();
 
+  const { hubs: liveHubs } = useLiveFarmData();
+  const [mapMode, setMapMode] = useState<'google' | 'vector'>('google');
   const [searchQuery, setSearchQuery] = useState('');
   const [activeCluster, setActiveCluster] = useState<Province | 'all'>('all');
   const [quickSmsText, setQuickSmsText] = useState('Inspect lower leaves after rain.');
+
+  const hubsWithLive = useMemo(() => {
+    return hubs.map((h) => ({
+      ...h,
+      live: liveHubs[h.id] || undefined,
+    }));
+  }, [hubs, liveHubs]);
 
   // Filtering
   const filteredFarms = useMemo(() => {
@@ -104,24 +116,53 @@ export const FarmMap: React.FC<FarmMapProps> = ({ onScreenFarm }) => {
           </div>
         </div>
 
-        {/* Quick Cluster Selector */}
-        <div className="flex items-center gap-1.5 p-1 bg-[#142318] border border-[#233a27] rounded-lg text-xs">
-          {(['all', 'Eastern', 'Lusaka', 'Central'] as const).map((cluster) => (
+        {/* Controls right side: cluster selector & mode toggle */}
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Map Type Mode Toggle */}
+          <div className="flex items-center gap-1 p-1 bg-[#142318] border border-[#233a27] rounded-lg text-xs">
             <button
-              key={cluster}
-              onClick={() => {
-                setActiveCluster(cluster);
-                setActiveProvinceFilter(cluster);
-              }}
-              className={`px-2.5 py-1 rounded-md font-semibold transition ${
-                activeCluster === cluster
+              onClick={() => setMapMode('google')}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md font-semibold transition cursor-pointer ${
+                mapMode === 'google'
                   ? 'bg-emerald-600 text-white shadow-sm'
                   : 'text-gray-400 hover:text-gray-200'
               }`}
             >
-              {cluster === 'all' ? 'All Clusters (108)' : `${cluster} Hub`}
+              <Globe className="w-3.5 h-3.5" />
+              <span>Google Satellite</span>
             </button>
-          ))}
+            <button
+              onClick={() => setMapMode('vector')}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md font-semibold transition cursor-pointer ${
+                mapMode === 'vector'
+                  ? 'bg-emerald-600 text-white shadow-sm'
+                  : 'text-gray-400 hover:text-gray-200'
+              }`}
+            >
+              <Layers className="w-3.5 h-3.5" />
+              <span>Vector Topology</span>
+            </button>
+          </div>
+
+          {/* Quick Cluster Selector */}
+          <div className="flex items-center gap-1.5 p-1 bg-[#142318] border border-[#233a27] rounded-lg text-xs">
+            {(['all', 'Eastern', 'Lusaka', 'Central'] as const).map((cluster) => (
+              <button
+                key={cluster}
+                onClick={() => {
+                  setActiveCluster(cluster);
+                  setActiveProvinceFilter(cluster);
+                }}
+                className={`px-2.5 py-1 rounded-md font-semibold transition cursor-pointer ${
+                  activeCluster === cluster
+                    ? 'bg-emerald-600 text-white shadow-sm'
+                    : 'text-gray-400 hover:text-gray-200'
+                }`}
+              >
+                {cluster === 'all' ? 'All (108)' : `${cluster}`}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -186,14 +227,23 @@ export const FarmMap: React.FC<FarmMapProps> = ({ onScreenFarm }) => {
       </div>
 
       {/* Main Map View & Slide-out Inspector */}
-      <div className="relative w-full h-[520px] bg-[#0a120c] overflow-hidden flex">
-        {/* Interactive SVG GIS Map */}
-        <div className="flex-1 h-full relative cursor-crosshair">
-          <svg
-            viewBox="0 0 800 540"
-            className="w-full h-full select-none"
-            style={{ filter: 'drop-shadow(0 0 20px rgba(0,0,0,0.5))' }}
-          >
+      <div className="relative w-full min-h-[560px] bg-[#0a120c] overflow-hidden flex">
+        {/* Map Canvas: Google Satellite or Vector GIS Map */}
+        {mapMode === 'google' ? (
+          <div className="flex-1 h-[560px] relative">
+            <GoogleFarmMap
+              farms={filteredFarms}
+              hubs={hubsWithLive}
+              onFarmClick={(farm) => setSelectedFarm(farm)}
+            />
+          </div>
+        ) : (
+          <div className="flex-1 h-full min-h-[520px] relative cursor-crosshair">
+            <svg
+              viewBox="0 0 800 540"
+              className="w-full h-full select-none"
+              style={{ filter: 'drop-shadow(0 0 20px rgba(0,0,0,0.5))' }}
+            >
             {/* Dark GIS grid lines */}
             <defs>
               <pattern id="gisGrid" width="40" height="40" patternUnits="userSpaceOnUse">
@@ -334,6 +384,7 @@ export const FarmMap: React.FC<FarmMapProps> = ({ onScreenFarm }) => {
             </div>
           </div>
         </div>
+      )}
 
         {/* Slide-out Farm Telemetry Inspector Drawer */}
         {selectedFarm && (

@@ -15,6 +15,7 @@ import {
   ShoppingBag,
   Truck,
   Building2,
+  LogOut,
 } from 'lucide-react';
 
 interface NavbarProps {
@@ -22,6 +23,7 @@ interface NavbarProps {
   setActiveTab: (tab: string) => void;
   onOpenSensorModal: () => void;
   onOpenCodeModal: () => void;
+  onLogout?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -29,6 +31,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   setActiveTab,
   onOpenSensorModal,
   onOpenCodeModal,
+  onLogout,
 }) => {
   const {
     currentUser,
@@ -95,7 +98,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           {/* 15-Step Hackathon Demo Launcher */}
           <button
             onClick={startGuidedDemo}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition shadow-sm ${
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition shadow-sm cursor-pointer ${
               isDemoRunning
                 ? 'bg-amber-500 text-black shadow-amber-500/20'
                 : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-900/30'
@@ -109,7 +112,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           {/* Simulate ESP32 Packet Button */}
           <button
             onClick={onOpenSensorModal}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#142217] hover:bg-[#1a2d1f] text-emerald-300 border border-[#233b28] font-medium transition"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#142217] hover:bg-[#1a2d1f] text-emerald-300 border border-[#233b28] font-medium transition cursor-pointer"
             title="Inject ESP32 Sensor Telemetry packet"
           >
             <Radio className="w-3.5 h-3.5 text-emerald-400" />
@@ -119,7 +122,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           {/* View Source Code / ESP32 Code */}
           <button
             onClick={onOpenCodeModal}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#142217] hover:bg-[#1a2d1f] text-gray-300 border border-[#233b28] font-medium transition"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#142217] hover:bg-[#1a2d1f] text-gray-300 border border-[#233b28] font-medium transition cursor-pointer"
             title="View FastAPI, ESP32, and Simulator Code"
           >
             <FileCode className="w-3.5 h-3.5 text-emerald-400" />
@@ -129,11 +132,23 @@ export const Navbar: React.FC<NavbarProps> = ({
           {/* Reset Baseline */}
           <button
             onClick={resetDemoData}
-            className="p-1.5 text-gray-400 hover:text-gray-200 hover:bg-[#19271c] rounded-lg transition"
+            className="p-1.5 text-gray-400 hover:text-gray-200 hover:bg-[#19271c] rounded-lg transition cursor-pointer"
             title="Reset to 82-18-8 baseline"
           >
             <RotateCcw className="w-3.5 h-3.5" />
           </button>
+
+          {/* Logout Button */}
+          {onLogout && (
+            <button
+              onClick={onLogout}
+              className="flex items-center gap-1 text-xs text-gray-300 hover:text-rose-300 px-3 py-1.5 border border-[#233b28] hover:border-rose-900/50 rounded-lg transition cursor-pointer"
+              title="Sign out of MundaSense"
+            >
+              <LogOut className="w-3 h-3" />
+              <span>Logout</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -149,13 +164,14 @@ export const Navbar: React.FC<NavbarProps> = ({
             { id: 'advisories', label: 'Advisory Engine' },
             { id: 'marketplace', label: 'ZMW Marketplace' },
             { id: 'transport', label: 'Transport Logistics' },
+            { id: 'tracking', label: 'Live Tracking' },
             { id: 'storage', label: 'Hermetic Storage' },
             { id: 'simulators', label: 'USSD / SMS Phones' },
           ].map((tab) => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`px-3 py-2 rounded-md font-semibold transition whitespace-nowrap ${
+              className={`px-3 py-2 rounded-md font-semibold transition whitespace-nowrap cursor-pointer ${
                 activeTab === tab.id
                   ? 'text-emerald-400 border-b-2 border-emerald-400 bg-[#16271c]'
                   : 'text-gray-400 hover:text-gray-200 hover:bg-[#121e15]'
