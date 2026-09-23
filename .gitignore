@@ -1,38 +1,138 @@
+# ============================================================
 # Dependencies
+# ============================================================
 node_modules/
+.pnp
+.pnp.js
+.yarn/
+.yarnrc.yml
 
+# ============================================================
 # Build output
+# ============================================================
 dist/
 build/
+out/
 .vite/
+.vite-cache/
+*.tsbuildinfo
 
-# Environment
+# ============================================================
+# Environment files
+# ============================================================
 .env
 .env.local
+.env.development.local
+.env.test.local
+.env.production.local
 .env.*.local
 
+# Keep the example template committed
+!.env.example
+
+# ============================================================
 # Logs
+# ============================================================
 *.log
 npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+logs/
+*.log.*
 
-# OS
+# ============================================================
+# Operating system files
+# ============================================================
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
+desktop.ini
 
-# Editor
+# ============================================================
+# Editor / IDE
+# ============================================================
 .vscode/
+!.vscode/extensions.json
 .idea/
 *.swp
+*.swo
+*~
+*.sublime-workspace
+*.sublime-project
 
-# Database (legacy SQLite — should not be present anymore)
+# ============================================================
+# Database files
+# ============================================================
+# SQLite (legacy — should not be present after MongoDB migration)
 *.db
 *.db-wal
 *.db-shm
+*.sqlite
+*.sqlite3
 data/
+data/*.db
 
+# ============================================================
+# Temporary / cache
+# ============================================================
+.cache/
+.temp/
+.tmp/
+temp/
+tmp/
+*.tmp
+*.bak
+*.orig
+
+# ============================================================
+# Testing
+# ============================================================
+coverage/
+.nyc_output/
+*.lcov
+
+# ============================================================
 # Render
+# ============================================================
 render.yaml.bak
+.render/
 
+# ============================================================
+# Deployment / Vercel / Netlify
+# ============================================================
+.vercel
+.netlify
+
+# ============================================================
 # Bun (if any leftovers)
+# ============================================================
 bun.lock
 bun.lockb
+.bun/
+
+# ============================================================
+# Secrets — never commit these
+# ============================================================
+*.pem
+*.key
+*.crt
+*.p12
+secrets.json
+credentials.json
+
+# ============================================================
+# Misc
+# ============================================================
+*.pid
+*.seed
+*.tgz
+*.zip
+*.tar.gz
+.eslintcache
+.stylelintcache
