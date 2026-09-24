@@ -4,6 +4,7 @@
  * Every report persists to SQLite with full treatment plan.
  */
 import { GoogleGenAI } from '@google/genai';
+import { classifyLeaf, isLocalModelReady, initLocalModel } from './mlDisease.ts';
 import {
   saveDiseaseReport,
   listDiseaseReports,
@@ -280,7 +281,7 @@ export interface DiseaseAnalysisResult {
   treatment_priority: string;
   treatment_reasoning: string;
   needs_expert_review: boolean;
-  mode: 'gemini' | 'fallback' | 'error';
+  mode: 'gemini' | 'fallback' | 'error' | 'local';
   report_id?: number;
 
   /* NEW: full treatment plan from database */
@@ -329,16 +330,64 @@ export async function analyzeLeafImage(
   }
   const [, mimeType, base64Data] = match;
 
-  let result: DiseaseAnalysisResult;
-  const client = getGenAI();
-  if (client) {
+  let result: DiseaseAnalysisResult | null = null;
+
+  // ---- Tier 1: Local PlantVillage model (fast, free, offline) ----
+  try {
+    await initLocalModel();
+    if (isLocalModelReady()) {
+      const prediction = await classifyLeaf(imageDataUrl);
+      if (prediction && prediction.confidence >= 0.75) {
+        console.log(
+          `[Disease] Local model: ${prediction.className} ` +
+          `(${(prediction.confidence * 100).toFixed(1)}%)`
+        );
+        result = {
+          crop: prediction.crop,
+          prediction: prediction.disease,
+          pathogen: extractPathogen(prediction.disease),
+          confidence: prediction.confidence,
+          severity: classifySeverity(prediction.disease),
+          risk: classifyRisk(prediction.disease),
+          stage: 'unknown',
+          spread_risk: 'moderate',
+          symptoms: buildSymptoms(prediction.disease),
+          yield_impact: 'unknown',
+          immediate_actions: buildImmediateActions(prediction.disease),
+          treatment_priority: 'organic',
+          treatment_reasoning:
+            'Local PlantVillage model — cost-free, offline-capable, ' +
+            'trained on 54,000+ leaf images across 38 disease classes.',
+          needs_expert_review: prediction.confidence < 0.75,
+          mode: 'local' as any,
+        } as any;
+
+        try {
+          result!.treatment_plan = getTreatmentPlan(result!.prediction);
+          result!.estimated_cost_zmw = estimateTreatmentCost(result!.prediction, 1);
+        } catch {}
+      } else if (prediction) {
+        console.log(
+          `[Disease] Local model low confidence (${(prediction.confidence * 100).toFixed(1)}%) — falling back to Gemini`
+        );
+      }
+    }
+  } catch (e: any) {
+    console.warn('[Disease] Local model unavailable:', e.message);
+  }
+
+  // ---- Tier 2: Gemini Vision (wide coverage for Zambian crops) ----
+  const ai = getGenAI();
+  if (!result && ai) {
     try {
-      result = await callGemini(client, mimeType, base64Data, cropHint, farmContext, weatherContext);
+      result = await callGemini(ai, mimeType, base64Data, cropHint, farmContext, weatherContext);
     } catch (e: any) {
       console.warn('[Disease] Gemini failed:', e.message);
-      result = fallbackAnalysis(cropHint, imageDataUrl);
     }
-  } else {
+  }
+
+  // ---- Tier 3: Rule-based fallback ----
+  if (!result) {
     result = fallbackAnalysis(cropHint, imageDataUrl);
   }
 
@@ -542,6 +591,32 @@ function normalizeEnum(value: any, allowed: string[], fallback: string): string 
 function extractPathogen(label: string): string {
   const m = label.match(/\(([^)]+)\)/);
   return m ? m[1] : 'Unknown';
+}
+
+function classifySeverity(disease: string): string {
+  if (/healthy/i.test(disease)) return 'none';
+  if (/Late|Rust|Armyworm|Virus|Blight|Rot/i.test(disease)) return 'high';
+  return 'moderate';
+}
+
+function classifyRisk(disease: string): string {
+  if (/healthy/i.test(disease)) return 'LOW';
+  if (/Late|Rust|Armyworm|Virus|Blight|Rot/i.test(disease)) return 'HIGH';
+  return 'WATCH';
+}
+
+function buildSymptoms(disease: string): string {
+  if (/healthy/i.test(disease)) return 'No visible disease symptoms detected.';
+  return `Visible symptoms consistent with ${disease}. Inspect leaves for lesions, discoloration, or pest damage.`;
+}
+
+function buildImmediateActions(disease: string): string[] {
+  if (/healthy/i.test(disease)) return ['Continue routine weekly monitoring.'];
+  return [
+    'Isolate and photograph the affected plants.',
+    'Remove infected leaves and burn them away from the field.',
+    'Consult extension officer for confirmation.',
+  ];
 }
 
 /* ============================================================

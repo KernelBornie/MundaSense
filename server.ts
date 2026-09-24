@@ -28,6 +28,7 @@ import {
   getCropList,
   geminiStatus,
 } from './server/disease.ts';
+import { isLocalModelReady, getLocalModelStatus, initLocalModel } from './server/mlDisease.ts';
 import { marketplaceRouter } from './server/marketplace.ts';
 import { advisoriesRouter } from './server/advisories.ts';
 import { sensorsRouter } from './server/sensors.ts';
@@ -51,6 +52,7 @@ const bootPromise = (async () => {
     await connectMongo();
     await seedIfEmpty();
     seedDepotsIfEmpty(); // uses the shim
+    await initLocalModel();
 
     const lukuluBootCount =
       (db.prepare("SELECT COUNT(*) as c FROM depots WHERE district = 'Lukulu'").get() as any)?.c || 0;
@@ -121,8 +123,13 @@ const publicUser = (u: any) => ({
 /* ============================================================
    HEALTH CHECK — placed early so it always responds
    ============================================================ */
-app.get('/api/health', (_req: Request, res: Response) => {
+app.get('/api/health', async (_req: Request, res: Response) => {
   try {
+    if (!getLocalModelStatus().attempted) {
+      await initLocalModel();
+    }
+    const modelStatus = getLocalModelStatus();
+
     const usersCount = (db.prepare('SELECT COUNT(*) as c FROM users').get() as any)?.c || 0;
     const farmsCount = (db.prepare('SELECT COUNT(*) as c FROM farms').get() as any)?.c || 0;
     const districtCount =
@@ -150,6 +157,9 @@ app.get('/api/health', (_req: Request, res: Response) => {
       active_listings: listingsCount,
       depots_total: depotsCount,
       disease_reports: reportsCount,
+      local_model_ready: modelStatus.ready,
+      local_model_classes: modelStatus.classes,
+      local_model_error: modelStatus.error,
       gemini_enabled: geminiStatus().enabled,
       gemini_model: geminiStatus().model,
       ussd_shortcode: '*2873#',

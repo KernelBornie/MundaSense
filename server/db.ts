@@ -326,8 +326,11 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     listing_id INTEGER REFERENCES listings(id),
     buyer_phone TEXT NOT NULL,
+    buyer_name TEXT,
+    buyer_email TEXT,
     quantity_kg REAL NOT NULL,
     total_zmw REAL NOT NULL,
+    delivery_address TEXT,
     status TEXT DEFAULT 'pending' CHECK (status IN ('pending','confirmed','in_transit','delivered','cancelled')),
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
   );
@@ -471,6 +474,30 @@ db.exec(`
 `);
 
 export const getDb = () => db;
+
+/* ============================================================
+   SCHEMA MIGRATIONS (Ensure columns exist on existing databases)
+   ============================================================ */
+function runMigrations() {
+  try {
+    const orderCols = (db.prepare("PRAGMA table_info('orders')").all() as any[]).map((c: any) => c.name);
+    if (!orderCols.includes('delivery_address')) {
+      db.exec('ALTER TABLE orders ADD COLUMN delivery_address TEXT');
+      console.log('[db] Migrated: added delivery_address to orders table');
+    }
+    if (!orderCols.includes('buyer_name')) {
+      db.exec('ALTER TABLE orders ADD COLUMN buyer_name TEXT');
+      console.log('[db] Migrated: added buyer_name to orders table');
+    }
+    if (!orderCols.includes('buyer_email')) {
+      db.exec('ALTER TABLE orders ADD COLUMN buyer_email TEXT');
+      console.log('[db] Migrated: added buyer_email to orders table');
+    }
+  } catch (err: any) {
+    console.warn('[db] Schema migration notice:', err?.message);
+  }
+}
+runMigrations();
 
 function reloadAllIntoCache() {
   for (const col of Object.keys(cache)) {

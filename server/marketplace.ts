@@ -48,8 +48,23 @@ marketplaceRouter.get('/marketplace/my-listings', (req: Request, res: Response) 
   `).all(phone));
 });
 
-marketplaceRouter.post('/marketplace/orders', (req: Request, res: Response) => {
-  const { listing_id, buyer_phone, quantity_kg, delivery_address } = req.body;
+marketplaceRouter.get('/marketplace/orders', (req: Request, res: Response) => {
+  const phone = String(req.query.phone || '').trim();
+  const sql = phone
+    ? `SELECT o.*, l.crop, l.price_per_kg_zmw, l.seller_phone, l.seller_name
+       FROM orders o
+       LEFT JOIN listings l ON l.id = o.listing_id
+       WHERE o.buyer_phone = ? OR l.seller_phone = ?
+       ORDER BY o.created_at DESC`
+    : `SELECT o.*, l.crop, l.price_per_kg_zmw, l.seller_phone, l.seller_name
+       FROM orders o
+       LEFT JOIN listings l ON l.id = o.listing_id
+       ORDER BY o.created_at DESC LIMIT 100`;
+  res.json(phone ? db.prepare(sql).all(phone, phone) : db.prepare(sql).all());
+});
+
+marketplaceRouter.post('/marketplace/orders', async (req: Request, res: Response) => {
+  const { listing_id, buyer_phone, buyer_name, buyer_email, quantity_kg, delivery_address } = req.body;
   if (!listing_id || !buyer_phone || !quantity_kg) {
     return res.status(400).json({ error: 'listing_id, buyer_phone, quantity_kg required' });
   }
@@ -57,9 +72,27 @@ marketplaceRouter.post('/marketplace/orders', (req: Request, res: Response) => {
   if (!listing) return res.status(404).json({ error: 'listing not found' });
   const total = Number(quantity_kg) * Number(listing.price_per_kg_zmw);
   const info = db.prepare(`
-    INSERT INTO orders (listing_id, buyer_phone, quantity_kg, total_zmw, delivery_address, status)
-    VALUES (?, ?, ?, ?, ?, 'pending')
-  `).run(listing_id, buyer_phone, quantity_kg, total, delivery_address || null);
+    INSERT INTO orders (listing_id, buyer_phone, buyer_name, buyer_email, quantity_kg, total_zmw, delivery_address, status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')
+  `).run(
+    listing_id,
+    buyer_phone,
+    buyer_name || null,
+    buyer_email || null,
+    quantity_kg,
+    total,
+    delivery_address || null
+  );
   db.prepare("UPDATE listings SET status = 'reserved' WHERE id = ?").run(listing_id);
+
+  try {
+    if (listing.seller_phone) {
+      await sendSms(
+        listing.seller_phone,
+        `MundaSense: New order #${info.lastInsertRowid} for ${quantity_kg}kg of ${listing.crop} (ZMW ${total.toFixed(2)}) placed by ${buyer_name ? `${buyer_name} (${buyer_phone})` : buyer_phone}. Delivery: ${delivery_address || 'Arranging'}.`
+      );
+    }
+  } catch {}
+
   res.json(db.prepare('SELECT * FROM orders WHERE id = ?').get(info.lastInsertRowid));
 });

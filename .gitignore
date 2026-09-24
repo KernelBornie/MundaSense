@@ -138,3 +138,19 @@ credentials.json
 *.tar.gz
 .eslintcache
 .stylelintcache
+
+# ML training artifacts — keep the ONNX export
+ml/checkpoints/best_model.pt
+ml/checkpoints/*.pt
+ml/data/
+/data/plantvillage/
+!ml/checkpoints/plantvillage_mobilenet.onnx
+!ml/classes.json
+
+# ============================================================
+# Explicitly track frontend data directory
+# ============================================================
+!src/data/
+!src/data/**
+!src/data/zambiaLocations.ts
+
